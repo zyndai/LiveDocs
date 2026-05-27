@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Secrets
+.env
+
+# Local data -- huge, transient, regenerable
+# tmp/docs              -> docs repo clone (re-created by fetch_docs.py)
+# tmp/qdrant_storage    -> Qdrant volume (re-created by `python index.py`)
+tmp/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
