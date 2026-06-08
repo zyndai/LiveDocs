@@ -71,6 +71,16 @@ GRAPH_MAX_NEIGHBORS = 6
 CODE_QDRANT_COLLECTION = "codebase_rag"
 DOCS_QDRANT_COLLECTION = "docs_rag"
 
+# --- GitHub URL mapping ---
+# Maps repo folder name (first component of code/) to its GitHub base URL.
+# Used to generate clickable links: {base}/blob/{branch}/{file_path}#L{start}-L{end}
+# Leave empty to disable GitHub links (falls back to local path citations).
+REPO_GITHUB_URLS: dict[str, str] = {
+    "AgentDNS": "https://github.com/zyndai/AgentDNS",
+}
+# Default branch for all repos. Override per-repo: {"AgentDNS": "main", "old-repo": "master"}
+REPO_GITHUB_BRANCH: str | dict[str, str] = "main"
+
 # --- Query decomposition ---
 # Max sub-queries a compound question is split into (caps fan-out latency).
 MAX_SUBQUERIES = 4

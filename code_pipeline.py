@@ -41,6 +41,7 @@ from haystack_integrations.components.retrievers.qdrant import QdrantHybridRetri
 
 from llm import make_generator, make_lite_client
 from code_graph import CodeGraph
+from app_utils import _github_url
 
 
 SYSTEM_PROMPT = """You are an assistant that answers questions about a codebase and its documentation using the passages provided as context.
@@ -48,7 +49,7 @@ SYSTEM_PROMPT = """You are an assistant that answers questions about a codebase 
 Rules:
 1. Ground every concrete claim (function names, signatures, behavior, file locations) in the provided passages. Do NOT invent APIs, functions, or files that aren't in the context.
 2. You MAY explain concepts, summarize how pieces fit together, and reason about the code and docs -- as long as the specifics come from the passages.
-3. When you reference code, cite it inline as `repo/file.ext:start-end`. When you reference docs, cite as `docs/source:heading`.
+3. When you reference code, cite it inline using the exact location string shown in the passage header (GitHub URL if present, otherwise repo/file:start-end). When you reference docs, cite as `docs/source:heading`.
 4. If the context genuinely lacks what's needed, say what's missing and which area to look in -- don't pretend.
 5. Be direct and technical. Show short code/signatures or doc excerpts from the context when they answer the question.
 6. End with a "Sources:" line listing each location you actually used, one per line.
@@ -59,7 +60,7 @@ USER_PROMPT_TEMPLATE = """{% if history %}=== PRIOR CONVERSATION ===
 {% endfor %}
 {% endif %}=== CONTEXT ===
 {% for doc in documents %}
-{% if doc.meta.get("node_id") or doc.meta.get("repo") %}[Passage {{ loop.index }}] {{ doc.meta.repo }}/{{ doc.meta.file }}:{{ doc.meta.start_line }}-{{ doc.meta.end_line }} ({{ doc.meta.symbol_type }} {{ doc.meta.symbol }}, {{ doc.meta.lang }})
+{% if doc.meta.get("node_id") or doc.meta.get("repo") %}[Passage {{ loop.index }}] {% if doc.meta.get("github_url") %}{{ doc.meta.github_url }}{% else %}{{ doc.meta.repo }}/{{ doc.meta.file }}:{{ doc.meta.start_line }}-{{ doc.meta.end_line }}{% endif %} ({{ doc.meta.symbol_type }} {{ doc.meta.symbol }}, {{ doc.meta.lang }})
 {% else %}[Passage {{ loop.index }}] docs/{{ doc.meta.source }} [{{ doc.meta.heading }}{% if doc.meta.subheading %} > {{ doc.meta.subheading }}{% endif %}]
 {% endif %}{{ doc.content }}
 
@@ -67,7 +68,7 @@ USER_PROMPT_TEMPLATE = """{% if history %}=== PRIOR CONVERSATION ===
 {% endfor %}
 {% if related %}=== Related context ===
 {% for doc in related %}
-{% if doc.meta.get("node_id") or doc.meta.get("repo") %}[Related] {{ doc.meta.repo }}/{{ doc.meta.file }}:{{ doc.meta.start_line }}-{{ doc.meta.end_line }} ({{ doc.meta.symbol_type }} {{ doc.meta.symbol }})
+{% if doc.meta.get("node_id") or doc.meta.get("repo") %}[Related] {% if doc.meta.get("github_url") %}{{ doc.meta.github_url }}{% else %}{{ doc.meta.repo }}/{{ doc.meta.file }}:{{ doc.meta.start_line }}-{{ doc.meta.end_line }}{% endif %} ({{ doc.meta.symbol_type }} {{ doc.meta.symbol }})
 {% else %}[Related] docs/{{ doc.meta.source }} [{{ doc.meta.heading }}{% if doc.meta.subheading %} > {{ doc.meta.subheading }}{% endif %}]
 {% endif %}{{ doc.content }}
 
@@ -314,6 +315,14 @@ def prepare(question, history=None):
     graph_related = _expand_with_graph(reranked)
     doc_related = _expand_docs(reranked)
     related = graph_related + doc_related
+
+    # Inject github_url into meta so the prompt template and source dicts both use it.
+    for d in reranked + related:
+        m = d.meta or {}
+        if m.get("repo") and m.get("file") and "github_url" not in m:
+            url = _github_url(m["repo"], m["file"], m.get("start_line"), m.get("end_line"))
+            if url:
+                d.meta["github_url"] = url
 
     msgs = _prompt_builder.run(
         documents=reranked,
