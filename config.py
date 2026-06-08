@@ -77,9 +77,9 @@ MAX_SUBQUERIES = 4
 
 
 # --- Embedding ---
-# Dense: Gemini text-embedding-004 — free tier (1500 req/min), same API key as LLM.
-# dim=768. To use OpenAI instead: "text-embedding-3-small" with dim=1536.
-DENSE_EMBEDDING_MODEL = "text-embedding-004"
+# Dense: Gemini Embedding 2 — latest available model, outputDimensionality=768.
+# text-embedding-004 is NOT available on AI Studio free keys; use gemini-embedding-2.
+DENSE_EMBEDDING_MODEL = "gemini-embedding-2"
 DENSE_EMBEDDING_DIM = 768
 
 # Sparse: BM25 via fastembed — pure tokenizer, no neural model, runs in ~1ms on CPU.
@@ -92,17 +92,23 @@ SPARSE_EMBEDDING_MODEL = "Qdrant/bm25"
 # --- LLM ---
 # Provider: "google" | "openai" | "anthropic". Swap = change LLM_PROVIDER + LLM_MODEL + env var.
 LLM_PROVIDER = "google"
-LLM_MODEL = "gemini-2.5-flash"
+LLM_MODEL = "gemini-2.5-pro"
 LLM_TEMPERATURE = 0.2
-LLM_MAX_OUTPUT_TOKENS = 1024
+# gemini-2.5-pro is a THINKING model: thinking tokens count against this cap.
+# 1024 was too low -- thinking ate the budget and the visible answer got
+# truncated (finishReason=MAX_TOKENS), leaving only the Sources line.
+LLM_MAX_OUTPUT_TOKENS = 8192
+# Cap internal reasoning so it can't consume the whole output budget.
+# gemini-2.5-pro minimum thinking_budget is 128; -1 = dynamic (model decides).
+LLM_THINKING_BUDGET = 1024
 
 # Cheap+fast model for rewrite/decompose calls (same provider as LLM_PROVIDER).
 REWRITER_MODEL = "gemini-2.5-flash"
 
 # --- Qdrant ---
-QDRANT_URL = "http://localhost:6333"
-# Legacy collection name kept for reference; active collections are CODE/DOCS above.
-QDRANT_COLLECTION = "zynd_docs_haystack"
+import os as _os
+QDRANT_URL = _os.environ.get("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = _os.environ.get("QDRANT_API_KEY")  # None = no auth (local Docker)
 
 # --- Retrieval ---
 RETRIEVE_TOP_K = 10

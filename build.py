@@ -13,6 +13,9 @@ Steps:
 Prereqs: Qdrant running on localhost:6333, deps installed, API key in .env.
 Put repos in code/ and .md files in docs/ before running.
 """
+from dotenv import load_dotenv
+load_dotenv()
+
 from collections import defaultdict
 from pathlib import Path
 
@@ -24,7 +27,7 @@ from chunker import parse_docs_tree, chunk_sections
 from config import CODE_QDRANT_COLLECTION, DOCS_QDRANT_COLLECTION, CODE_DIR, DOCS_DIR
 
 
-def build_code():
+def build_code(resume=False):
     print(f"\n=== [1/2] Building CODE index from {CODE_DIR} ===")
 
     print("\n--- Walking + chunking source files ---")
@@ -55,11 +58,11 @@ def build_code():
     print(f"Serialized -> {path}")
 
     documents = build_code_documents(all_chunks)
-    index_documents(documents, CODE_QDRANT_COLLECTION, recreate=True)
+    index_documents(documents, CODE_QDRANT_COLLECTION, recreate=not resume, resume=resume)
     print(f"Code index done. Collection: {CODE_QDRANT_COLLECTION}")
 
 
-def build_docs():
+def build_docs(resume=False):
     print(f"\n=== [2/2] Building DOCS index from {DOCS_DIR} ===")
 
     if not DOCS_DIR.exists() or not any(DOCS_DIR.rglob("*.md")):
@@ -73,13 +76,26 @@ def build_docs():
     print(f"{len(sections)} sections -> {len(chunks)} chunks")
 
     documents = build_documents(chunks)
-    index_documents(documents, DOCS_QDRANT_COLLECTION, recreate=True)
+    index_documents(documents, DOCS_QDRANT_COLLECTION, recreate=not resume, resume=resume)
     print(f"Docs index done. Collection: {DOCS_QDRANT_COLLECTION}")
 
 
 def main():
-    build_code()
-    build_docs()
+    import argparse
+    parser = argparse.ArgumentParser(description="Build code + docs Qdrant indexes.")
+    parser.add_argument("--code", action="store_true", help="Build code index only")
+    parser.add_argument("--docs", action="store_true", help="Build docs index only")
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from last checkpoint — skip already-written batches")
+    args = parser.parse_args()
+
+    run_code = args.code or (not args.code and not args.docs)
+    run_docs = args.docs or (not args.code and not args.docs)
+
+    if run_code:
+        build_code(resume=args.resume)
+    if run_docs:
+        build_docs(resume=args.resume)
     print("\n=== Build complete. Start the server: uvicorn app:app --port 8002 ===")
 
 

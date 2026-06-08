@@ -8,24 +8,31 @@ Supported providers:
 streaming_callback: if provided, the generator will call it with each StreamingChunk
 as tokens arrive. Use the queue bridge in code_pipeline.py for SSE streaming.
 """
-from config import LLM_PROVIDER, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS
+from config import (
+    LLM_PROVIDER, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS,
+    LLM_THINKING_BUDGET,
+)
 from haystack.utils import Secret
 
 
 def make_generator(streaming_callback=None):
-    kwargs = dict(
-        generation_kwargs={
-            "temperature": LLM_TEMPERATURE,
-            "max_output_tokens": LLM_MAX_OUTPUT_TOKENS,
-        },
-    )
+    gen_kwargs = {
+        "temperature": LLM_TEMPERATURE,
+        "max_output_tokens": LLM_MAX_OUTPUT_TOKENS,
+    }
+    kwargs = dict(generation_kwargs=gen_kwargs)
     if streaming_callback is not None:
         kwargs["streaming_callback"] = streaming_callback
 
     provider = LLM_PROVIDER.lower()
 
     if provider == "google":
+        from google.genai import types as genai_types
         from haystack_integrations.components.generators.google_genai import GoogleGenAIChatGenerator
+        # Bound thinking so it can't consume the whole output budget.
+        gen_kwargs["thinking_config"] = genai_types.ThinkingConfig(
+            thinking_budget=LLM_THINKING_BUDGET,
+        )
         return GoogleGenAIChatGenerator(
             model=LLM_MODEL,
             api_key=Secret.from_env_var("GOOGLE_API_KEY"),

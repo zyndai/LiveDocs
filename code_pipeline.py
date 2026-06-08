@@ -27,17 +27,16 @@ load_dotenv()
 
 from config import (
     DENSE_EMBEDDING_MODEL, SPARSE_EMBEDDING_MODEL,
-    QDRANT_URL, CODE_QDRANT_COLLECTION, DOCS_QDRANT_COLLECTION,
+    QDRANT_URL, QDRANT_API_KEY, CODE_QDRANT_COLLECTION, DOCS_QDRANT_COLLECTION,
     RETRIEVE_TOP_K, RERANK_TOP_K, DENSE_EMBEDDING_DIM,
     MAX_SUBQUERIES,
 )
 
 from haystack.components.builders import ChatPromptBuilder
 from haystack.dataclasses import ChatMessage
-from haystack.utils import Secret
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 from haystack_integrations.components.embedders.fastembed import FastembedSparseTextEmbedder
-from haystack_integrations.components.embedders.google_genai import GoogleGenAITextEmbedder
+from gemini_embedder import GeminiTextEmbedder
 from haystack_integrations.components.retrievers.qdrant import QdrantHybridRetriever
 
 from llm import make_generator, make_lite_client
@@ -132,20 +131,21 @@ def _ensure_loaded():
     if not os.environ.get("GOOGLE_API_KEY"):
         raise SystemExit("GOOGLE_API_KEY not set. Required for embeddings + LLM. Add it to .env.")
 
+    from haystack.utils import Secret
+    _qdrant_key = Secret.from_token(QDRANT_API_KEY) if QDRANT_API_KEY else None
     _code_store = QdrantDocumentStore(
         url=QDRANT_URL, index=CODE_QDRANT_COLLECTION,
         embedding_dim=DENSE_EMBEDDING_DIM, use_sparse_embeddings=True,
+        api_key=_qdrant_key,
     )
     _docs_store = QdrantDocumentStore(
         url=QDRANT_URL, index=DOCS_QDRANT_COLLECTION,
         embedding_dim=DENSE_EMBEDDING_DIM, use_sparse_embeddings=True,
+        api_key=_qdrant_key,
     )
 
-    # Dense: Gemini text-embedding-004 — free tier, same key as LLM
-    _dense_emb = GoogleGenAITextEmbedder(
-        model=DENSE_EMBEDDING_MODEL,
-        api_key=Secret.from_env_var("GOOGLE_API_KEY"),
-    )
+    # Dense: Gemini text-embedding-004 via direct SDK (bypasses v1beta bug)
+    _dense_emb = GeminiTextEmbedder(model=DENSE_EMBEDDING_MODEL)
     _dense_emb.warm_up()
 
     # Sparse: BM25 via fastembed — CPU, ~1MB vocab, no neural inference

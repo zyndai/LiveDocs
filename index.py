@@ -13,11 +13,16 @@ Drop .md files in docs/ then run:
 
 To fetch from a remote git repo first, run fetch_docs.py manually.
 """
+import time
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
+
 from chunker import parse_docs_tree, chunk_sections
 from config import (
     DOCS_DIR,
     DENSE_EMBEDDING_MODEL, DENSE_EMBEDDING_DIM, SPARSE_EMBEDDING_MODEL,
-    QDRANT_URL, DOCS_QDRANT_COLLECTION,
+    QDRANT_URL, QDRANT_API_KEY, DOCS_QDRANT_COLLECTION,
 )
 
 from haystack import Pipeline, Document
@@ -25,7 +30,7 @@ from haystack.components.writers import DocumentWriter
 from haystack.utils import Secret
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 from haystack_integrations.components.embedders.fastembed import FastembedSparseDocumentEmbedder
-from haystack_integrations.components.embedders.google_genai import GoogleGenAIDocumentEmbedder
+from gemini_embedder import GeminiDocumentEmbedder
 
 
 def build_documents(chunks):
@@ -86,43 +91,85 @@ def build_code_documents(chunks):
     return docs
 
 
-def index_documents(documents, collection, recreate=True):
-    """Embed (dense OpenAI + sparse BM25) and write documents to a Qdrant collection.
+_CHECKPOINT_DIR = Path(__file__).resolve().parent / "tmp" / "checkpoints"
+_WRITE_BATCH = 10    # docs per embed+write cycle
+_BATCH_SLEEP = 10    # seconds between batches — keeps Gemini free tier under 30K TPM
 
-    Shared by the markdown and code build paths.
-    Dense: OpenAI API calls (batched by Haystack). Sparse: BM25 fastembed (CPU, instant).
+
+def _checkpoint_path(collection):
+    return _CHECKPOINT_DIR / f"{collection}_progress.json"
+
+
+def index_documents(documents, collection, recreate=True, resume=False):
+    """Embed+write+checkpoint per batch. Crash-safe: resume from last completed batch.
+
+    resume=True: skip already-written batches, continue from checkpoint.
+    Each batch: dense embed -> sparse embed -> write to Qdrant -> save checkpoint.
     """
-    import os
-    print(f"\n--- Connecting to Qdrant at {QDRANT_URL} (collection: {collection}) ---")
-    document_store = QdrantDocumentStore(
+    import json
+    from haystack.utils import Secret
+
+    checkpoint = _checkpoint_path(collection)
+    start_batch = 0
+
+    if resume and checkpoint.exists():
+        data = json.loads(checkpoint.read_text())
+        start_batch = data.get("done", 0)
+        print(f"\nResuming {collection} from batch {start_batch}/{data.get('total')}")
+        recreate = False  # collection already exists, don't wipe it
+
+    batches = [documents[i:i + _WRITE_BATCH] for i in range(0, len(documents), _WRITE_BATCH)]
+    total_batches = len(batches)
+
+    print(f"\n--- {collection}: {len(documents)} docs in {total_batches} batches ---")
+    print(f"--- Dense: Gemini {DENSE_EMBEDDING_MODEL} | Sparse: BM25 fastembed ---")
+
+    dense_embedder = GeminiDocumentEmbedder(model=DENSE_EMBEDDING_MODEL)
+    dense_embedder.warm_up()
+    sparse_embedder = FastembedSparseDocumentEmbedder(model=SPARSE_EMBEDDING_MODEL)
+    sparse_embedder.warm_up()
+
+    _api_key = Secret.from_token(QDRANT_API_KEY) if QDRANT_API_KEY else None
+    print(f"--- Qdrant at {QDRANT_URL} ---")
+
+    doc_store = QdrantDocumentStore(
         url=QDRANT_URL,
         index=collection,
         embedding_dim=DENSE_EMBEDDING_DIM,
-        recreate_index=recreate,
+        recreate_index=(recreate and start_batch == 0),
         use_sparse_embeddings=True,
+        api_key=_api_key,
     )
+    writer = DocumentWriter(document_store=doc_store)
 
-    print(f"--- Dense embedder: Gemini {DENSE_EMBEDDING_MODEL} (free tier) ---")
-    dense_embedder = GoogleGenAIDocumentEmbedder(
-        model=DENSE_EMBEDDING_MODEL,
-        api_key=Secret.from_env_var("GOOGLE_API_KEY"),
-    )
-    print(f"--- Sparse embedder: BM25 fastembed (CPU, no download) ---")
-    sparse_embedder = FastembedSparseDocumentEmbedder(model=SPARSE_EMBEDDING_MODEL)
-    writer = DocumentWriter(document_store=document_store)
+    written_total = 0
+    for i, batch in enumerate(batches):
+        if i < start_batch:
+            print(f"  Batch {i+1}/{total_batches} — skipped (already written)")
+            continue
 
-    pipeline = Pipeline()
-    pipeline.add_component("dense_embedder", dense_embedder)
-    pipeline.add_component("sparse_embedder", sparse_embedder)
-    pipeline.add_component("writer", writer)
-    pipeline.connect("dense_embedder.documents", "sparse_embedder.documents")
-    pipeline.connect("sparse_embedder.documents", "writer.documents")
+        print(f"\n  Batch {i+1}/{total_batches} ({len(batch)} docs) — embedding...")
+        embedded = dense_embedder.run(documents=batch)["documents"]
+        embedded = sparse_embedder.run(documents=embedded)["documents"]
 
-    print(f"\n--- Embedding & writing {len(documents)} documents ---")
-    result = pipeline.run({"dense_embedder": {"documents": documents}})
-    written = result.get("writer", {}).get("documents_written")
-    print(f"\nDone. {written} documents written.")
-    return written
+        # After first write collection exists; never recreate again mid-run
+        if i > 0 or not (recreate and start_batch == 0):
+            doc_store.recreate_index = False
+
+        result = writer.run(documents=embedded)
+        n = result.get("documents_written", len(embedded))
+        written_total += n
+
+        checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint.write_text(json.dumps({"done": i + 1, "total": total_batches}))
+        print(f"  Written {n} docs. Progress: {i+1}/{total_batches} checkpointed.")
+
+        if i + 1 < total_batches:
+            time.sleep(_BATCH_SLEEP)
+
+    checkpoint.unlink(missing_ok=True)
+    print(f"\nDone. {written_total} total documents written to '{collection}'.")
+    return written_total
 
 
 def main():
