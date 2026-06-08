@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+env
+tmp/
+code/
+docs/
+.git/
+.idea/
+.vscode/
+*.pkl

@@ -1,249 +1,153 @@
-# ragpipline — Haystack-based docs RAG
+# Codebase RAG — vector + graph
 
-Multi-turn doc Q&A built on Haystack. This folder is self-contained — treat
-it as if it were its own GitHub repo. All commands below assume you've opened
-this folder directly in VS Code (so the integrated terminal's working
-directory is the ragpipline root).
+Chat with your codebase. Drop repos into `code/`, run one build command, then
+ask questions in natural language. Answers are grounded in your actual code,
+cite `repo/file.ext:start-end`, and use a call graph to explain how pieces
+connect. Heavy work happens once at build time; runtime queries are fast.
 
-## What's here
+## How it works
+
+```
+BUILD (slow, once)                          RUNTIME (fast, per query)
+──────────────────                          ─────────────────────────
+walk code/  ──► tree-sitter chunk ──┐       question (+ history)
+(py/js/ts/go)   (1 chunk/symbol)    │            │
+                                    ├─► embed  decompose into sub-queries
+                 extract edges ─────┤   bge-m3  (splits "and"/multi-intent)
+                 (calls/imports)    │   +SPLADE      │
+                      │             └─► Qdrant   hybrid search each ──► pool
+                 build graph                         │
+                      │                          rerank pool (cross-encoder)
+                 serialize ──► tmp/code_graph.pkl    │
+                                    ▲           graph expand: 1-hop callers/
+                              loaded into RAM    callees (O(1) RAM lookup)
+                              at server start         │
+                                                 LLM explain + cite file:line
+```
 
 | File | Role |
 |---|---|
-| `config.py` | All knobs: models, ports, paths, Qdrant URL |
-| `chunker.py` | Heading-aware markdown chunker (two-pass) |
-| `fetch_docs.py` | Clones / pulls the docs repo into `tmp/docs/` |
-| `index.py` | **Build the index** — runs once when docs change |
-| `pipeline.py` | **Query path** — embed → hybrid search → rerank → LLM |
-| `app.py` | FastAPI HTTP wrapper around `pipeline.py` |
-| `.env` | `GOOGLE_API_KEY`, `GITHUB_TOKEN` (gitignored, copy from `.env.example`) |
-| `requirements.txt` | Python deps |
+| `config.py` | All knobs (paths, models, ports, code extensions, graph) |
+| `code_walker.py` | Walk `code/`, filter by extension, skip junk dirs |
+| `code_chunker.py` | tree-sitter → one chunk per function/class/method + call/import edges |
+| `code_graph.py` | Build + serialize graph (build); O(1) adjacency lookups (runtime) |
+| `index.py` | Embed (bge-m3 dense + SPLADE sparse) → Qdrant |
+| `build.py` | **One command**: walk → chunk → graph → embed → index |
+| `code_pipeline.py` | Query: decompose → retrieve → rerank → graph-expand → LLM |
+| `app.py` | FastAPI HTTP wrapper (`POST /ask`) |
 
 ## Prerequisites
 
 - **Python 3.12+**
 - **Docker** (for Qdrant)
-- A **Google AI Studio API key** — get one at https://aistudio.google.com/apikey
-- A **GitHub PAT** if your docs repo is private (see below)
+- A **Google AI Studio API key** — https://aistudio.google.com/apikey
 
-## First-time setup (do once)
+## Setup (once)
 
-```powershell
-# 1. create + activate the venv (lives inside this folder)
+```bash
 python -m venv .venv
-.\.venv\Scripts\activate
-
-# 2. install deps (~5 minutes first time -- pulls torch, transformers, etc.)
-pip install -r requirements.txt
-
-# 3. set up secrets
-copy .env.example .env
-notepad .env        # paste GOOGLE_API_KEY (and GITHUB_TOKEN if the docs repo is private)
+source .venv/bin/activate            # Windows: .\.venv\Scripts\activate
+pip install -r requirements.txt      # ~5 min first time (pulls torch, transformers)
+cp .env.example .env                 # then add your GOOGLE_API_KEY
 ```
 
-### Private docs repo
+## Add your code
 
-`DOCS_REPO_URL` in `config.py` points at the docs repo. If that repo is
-private, you need `GITHUB_TOKEN` in `.env`.
+Drop any number of repos/folders into `code/`:
 
-## Running the stack (three terminals)
+```
+code/
+  my-backend/
+  my-frontend/
+  some-library/
+```
 
-All three terminals start at this folder (the ragpipline root). No `cd ..`
-anywhere.
+Indexed file types: `.py .js .jsx .ts .tsx .go`. Junk dirs
+(`node_modules`, `.venv`, `dist`, `build`, `target`, `vendor`, `.git`, …) are
+skipped automatically. Adjust `CODE_LANG_BY_EXT` / `CODE_IGNORE_DIRS` in
+`config.py`.
 
-### Terminal 1 — Qdrant (vector database)
+## Run (three terminals)
 
-```powershell
-docker run -p 6333:6333 -p 6334:6334 `
-    -v ${PWD}/tmp/qdrant_storage:/qdrant/storage `
+### Terminal 1 — Qdrant (vector DB)
+```bash
+docker run -p 6333:6333 -p 6334:6334 \
+    -v ${PWD}/tmp/qdrant_storage:/qdrant/storage \
     qdrant/qdrant
 ```
-
-Wait for `Qdrant HTTP listening on 6333`. Leave it running.
-
-Persistent data lives in `tmp/qdrant_storage/` inside this folder. Survives
-container restarts. Already in `.gitignore` so it won't be committed.
-
 Dashboard: http://localhost:6333/dashboard
 
-### Terminal 2 — Build the index (run only when docs change)
-
-```powershell
-.\.venv\Scripts\activate
-python index.py
+### Terminal 2 — Build the knowledge base (re-run when code changes)
+```bash
+source .venv/bin/activate
+python build.py
 ```
-
-What this does:
-1. Clones the docs repo into `tmp/docs/` (first run) or pulls latest
-2. Chunks all `.md` files (heading-aware, two-pass)
-3. Embeds each chunk with **bge-m3** (dense, 1024-dim) **AND** SPLADE (sparse)
-4. Writes everything to the `zynd_docs_haystack` Qdrant collection
-5. Prints `Haystack reports N documents written.` and exits
-
-First run downloads model weights (~3.5 GB total) into your HuggingFace cache
-(`~/.cache/huggingface/`). Subsequent runs reuse them.
-
-**Time estimate:** 30–45 min on CPU first time. 10–15 min thereafter (no
-re-download). Under a minute on a GPU.
-
-You only re-run this when docs change.
+Walks `code/`, chunks with tree-sitter, builds the graph
+(`tmp/code_graph.pkl`), embeds, and writes Qdrant. First run downloads model
+weights (~3.5 GB) into `~/.cache/huggingface/`. Slow on CPU first time; fast
+after.
 
 ### Terminal 3 — Start the API server
-
-```powershell
-.\.venv\Scripts\activate
+```bash
+source .venv/bin/activate
 uvicorn app:app --port 8002
 ```
+Wait for `Ready.` (loads models + graph into RAM). API at http://localhost:8002.
 
-Wait for `Ready.` then `Application startup complete.` (model warm-up takes
-about 30 seconds).
+## Use it
 
-Backend is now live at **http://localhost:8002**.
-
-## Verify it works
-
-### Health check
-
-```powershell
-curl.exe http://localhost:8002/health
-# -> {"status":"ok","impl":"haystack"}
+```bash
+curl http://localhost:8002/health
+# -> {"status":"ok","impl":"code-vector-graph"}
 ```
 
-### Single-shot question (no history)
-
-Open http://localhost:8002/docs in your browser → click `/ask` →
-"Try it out" → paste:
+Interactive docs: http://localhost:8002/docs → `/ask`.
 
 ```json
-{ "question": "how do I deploy an agent on zynd?" }
-```
-
-Or from PowerShell:
-
-```powershell
-$body = @{ question = "how do I deploy an agent on zynd?" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri http://localhost:8002/ask `
-    -ContentType "application/json" -Body $body
+{ "question": "how does auth work and how do I add a new route?" }
 ```
 
 Response:
-
 ```json
 {
-  "answer": "You can deploy in two ways...",
-  "sources": [{"source": "deployer/deploy.md", ...}, ...],
-  "retrieval_query": "how do I deploy an agent on zynd?"
+  "answer": "... cites my-backend/auth.py:8-15 ...",
+  "sources":     [{ "repo": "...", "file": "...", "symbol": "...", "start_line": 8, "end_line": 15, "score": 0.91 }],
+  "related":     [{ "...": "call-graph neighbors pulled in as context" }],
+  "sub_queries": ["how does auth work?", "how do I add a new route?"]
 }
 ```
 
-### Multi-turn (with history)
+Multi-turn: pass prior turns as `history` (same format as the docs pipeline).
+Follow-ups are rewritten to standalone form before retrieval.
 
-Send the prior conversation as `history`:
-
-```json
-{
-  "question": "what files should I include in the zip?",
-  "history": [
-    { "role": "user", "content": "how do I deploy an agent on zynd?" },
-    { "role": "assistant", "content": "<the previous answer text>" }
-  ]
-}
-```
-
-Watch `retrieval_query` in the response — when history is non-empty, a
-separate Gemini Flash call rewrites the question into a standalone form
-before retrieval. So `"what files should I include in the zip?"` becomes
-something like `"What files should I include when deploying an agent to
-deployer.zynd.ai?"`, which retrieves much better chunks than the bare
-follow-up would.
-
-## Configuration knobs (`config.py`)
+## Key config knobs (`config.py`)
 
 | Variable | Default | Effect |
 |---|---|---|
-| `DOCS_REPO_URL` | (set in config.py) | The docs repo to clone |
-| `DENSE_EMBEDDING_MODEL` | `BAAI/bge-m3` | Must match between index + query |
-| `SPARSE_EMBEDDING_MODEL` | `prithivida/Splade_PP_en_v1` | Same — must match |
-| `RERANKER_MODEL` | `BAAI/bge-reranker-large` | Cross-encoder for final ordering |
-| `LLM_MODEL` | `gemma-4-26b-a4b-it` | Switch to `"gemini-2.5-flash"` for faster/cheaper |
-| `REWRITER_MODEL` | `gemini-2.5-flash` | Follow-up question rewriter |
-| `RETRIEVE_TOP_K` | `10` | How many chunks the retriever returns |
-| `RERANK_TOP_K` | `5` | How many chunks the LLM sees |
-| `QDRANT_COLLECTION` | `zynd_docs_haystack` | Collection name in Qdrant |
-| `API_PORT` | `8002` | Note: actually passed via uvicorn `--port` |
+| `CODE_DIR` | `./code` | Where your repos live |
+| `CODE_LANG_BY_EXT` | py/js/ts/go | Extensions → tree-sitter grammar |
+| `CODE_MAX_TOKENS` | `1000` | Max tokens per symbol chunk (oversized split) |
+| `GRAPH_EXPAND_HOPS` | `1` | Call-graph hops pulled in as context |
+| `GRAPH_MAX_NEIGHBORS` | `6` | Cap neighbors per hit |
+| `MAX_SUBQUERIES` | `4` | Cap on compound-question fan-out |
+| `RETRIEVE_TOP_K` | `10` | Chunks retrieved per sub-query |
+| `RERANK_TOP_K` | `5` | Chunks the LLM sees |
+| `LLM_MODEL` | `gemma-4-26b-a4b-it` | Switch to `gemini-2.5-flash` for faster/cheaper |
+| `CODE_QDRANT_COLLECTION` | `codebase_rag` | Qdrant collection name |
 
-## Updating docs after they change
+## Updating after code changes
 
-```powershell
-.\.venv\Scripts\activate
-python index.py       # re-fetch + re-chunk + re-embed + re-write Qdrant
+```bash
+source .venv/bin/activate
+python build.py        # re-walk + re-chunk + rebuild graph + re-embed
 ```
-
-The API server stays up — no restart needed. It reads Qdrant on every query,
-so the new index takes effect immediately.
+Restart the server so it reloads the new graph into RAM.
 
 ## Troubleshooting
 
-### `ModuleNotFoundError: No module named '...'`
-The venv isn't activated, or the package installed into a different Python.
-Bulletproof install:
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-### `GOOGLE_API_KEY not set`
-Missing `.env`. Copy from `.env.example` and add your key.
-
-### `Authentication failed` cloning docs
-`GITHUB_TOKEN` is missing, expired, or doesn't have access to the docs repo.
-Check token scope at https://github.com/settings/tokens.
-
-### `Connection refused` to Qdrant
-Qdrant container isn't running. Check Terminal 1.
-
-### `500 INTERNAL` from the LLM
-Gemma 4 endpoint occasionally flakes. Edit `config.py` →
-`LLM_MODEL = "gemini-2.5-flash"`, restart uvicorn.
-
-### Server hangs on first `/ask`
-Likely still loading models. Wait for `Ready.` in the uvicorn log.
-
-### Slow queries (5–10s on CPU)
-That's normal on CPU. See "Performance" below.
-
-## Performance
-
-| Stage | Time on CPU | Time on GPU |
-|---|---|---|
-| Question embed (bge-m3 + SPLADE) | ~1 s | <0.1 s |
-| Qdrant hybrid search | <100 ms | <100 ms |
-| Rerank (bge-reranker-large, 10 candidates) | 2–4 s | 0.2 s |
-| LLM call (Gemma 4, network) | 2–5 s | 2–5 s (network-bound) |
-| **Total** | **~6–10 s** | **~3 s** |
-
-The LLM call is network-bound to Google's servers — your hardware doesn't
-change it. Only self-hosting the LLM (e.g. via Ollama) eliminates that ~3s
-floor.
-
-Biggest CPU-side win: `LLM_MODEL = "gemini-2.5-flash"` in `config.py`
-(~2–3s saved per query, comparable answer quality for grounded Q&A).
-
-## What runs where
-
-```
-   ┌─────────────────────┐
-   │  Your frontend      │     VitePress site (separately hosted)
-   └──────────┬──────────┘
-              │ POST /ask  {question, history}
-              ▼
-   ┌─────────────────────┐
-   │     app.py          │     FastAPI on localhost:8002
-   │  (this folder)      │     Holds models in RAM, ~4 GB
-   └──────┬──────────┬───┘
-          │          │ HTTPS
-          │          └─────────► Google AI Studio (Gemma 4 / Gemini Flash)
-          ▼
-   ┌─────────────────────┐
-   │      Qdrant         │     Docker on localhost:6333
-   │   N vectors         │     Persistent volume in tmp/qdrant_storage/
-   └─────────────────────┘
-```
+- **`CODE_DIR not found`** — create `code/` and drop repos in it.
+- **`No chunks produced`** — `code/` has no `.py/.js/.ts/.go` files (or all in ignored dirs).
+- **`GOOGLE_API_KEY not set`** — copy `.env.example` → `.env`, add your key.
+- **`Connection refused` to Qdrant** — Qdrant container isn't running (Terminal 1).
+- **No graph expansion** — `tmp/code_graph.pkl` missing; run `build.py`.
+- **`500 INTERNAL` from LLM** — set `LLM_MODEL = "gemini-2.5-flash"`, restart server.

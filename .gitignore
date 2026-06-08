@@ -7,11 +7,17 @@ __pycache__/
 
 # Secrets
 .env
+env
 
 # Local data -- huge, transient, regenerable
 # tmp/docs              -> docs repo clone (re-created by fetch_docs.py)
-# tmp/qdrant_storage    -> Qdrant volume (re-created by `python index.py`)
+# tmp/qdrant_storage    -> Qdrant volume (re-created by build.py / index.py)
+# tmp/code_graph.pkl    -> serialized code graph (re-created by build.py)
 tmp/
+
+# User content dropped in for indexing -- not part of this repo.
+code/
+docs/
 
 # IDE
 .vscode/

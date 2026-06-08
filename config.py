@@ -4,9 +4,10 @@ from pathlib import Path
 
 # --- Paths ---
 HERE = Path(__file__).resolve().parent
-DOCS_DIR = HERE / "tmp" / "docs"   # local clone, fully inside ragpipline/.
+# Drop .md files here to index prose docs. No git fetch required.
+DOCS_DIR = HERE / "docs"
 
-# --- Docs source (for ragpipline/fetch_docs.py) ---
+# --- Docs source (optional remote fetch via fetch_docs.py) ---
 DOCS_REPO_URL = "https://github.com/zyndai/docs"
 DOCS_BRANCH = "main"
 
@@ -19,31 +20,88 @@ TOKENIZER_ENCODING = "cl100k_base"
 IGNORE_DIRS = {".vitepress", "node_modules", ".git", "dist", ".cache"}
 
 
+# =====================================================================
+# CODEBASE RAG (vector + graph). Self-contained from the markdown config
+# above; the code path uses only the keys in this section plus the shared
+# embedding / reranker / LLM settings below.
+# =====================================================================
+
+# --- Code source ---
+# Drop any number of repos/folders into CODE_DIR. The walker recurses into all
+# of them. First path component under CODE_DIR is treated as the "repo" name.
+CODE_DIR = HERE / "code"
+
+# File extensions to index, mapped to the tree-sitter grammar name used by
+# tree-sitter-language-pack. Anything not listed is skipped.
+CODE_LANG_BY_EXT = {
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".go": "go",
+}
+CODE_EXTENSIONS = set(CODE_LANG_BY_EXT)
+
+# Directories never walked (build artifacts, vendored deps, VCS, caches).
+CODE_IGNORE_DIRS = {
+    ".git", ".hg", ".svn",
+    "node_modules", "vendor", "dist", "build", "out", "target",
+    ".venv", "venv", "env", "__pycache__", ".mypy_cache", ".pytest_cache",
+    ".cache", ".next", ".nuxt", "coverage", ".idea", ".vscode",
+}
+
+# Skip files larger than this (generated bundles, minified, lockfiles).
+CODE_MAX_FILE_BYTES = 1_000_000
+
+# Code-chunk sizing (token budget per symbol chunk; oversized funcs are split).
+CODE_MAX_TOKENS = 1000
+CODE_OVERLAP_TOKENS = 120
+
+# --- Graph ---
+# Serialized at build time, loaded into RAM at server start. Runtime lookups
+# are O(1) adjacency reads -- no traversal cost.
+GRAPH_PATH = HERE / "tmp" / "code_graph.pkl"
+# How many graph hops of neighbors to pull in as extra LLM context per hit.
+GRAPH_EXPAND_HOPS = 1
+# Cap neighbors pulled per retrieved chunk so context stays bounded.
+GRAPH_MAX_NEIGHBORS = 6
+
+# --- Qdrant collections ---
+CODE_QDRANT_COLLECTION = "codebase_rag"
+DOCS_QDRANT_COLLECTION = "docs_rag"
+
+# --- Query decomposition ---
+# Max sub-queries a compound question is split into (caps fan-out latency).
+MAX_SUBQUERIES = 4
+
+
 # --- Embedding ---
-# Dense: same bge-m3 as the main pipeline (used in dense-only mode via sentence-transformers).
-DENSE_EMBEDDING_MODEL = "BAAI/bge-m3"
-DENSE_EMBEDDING_DIM = 1024
+# Dense: Gemini text-embedding-004 — free tier (1500 req/min), same API key as LLM.
+# dim=768. To use OpenAI instead: "text-embedding-3-small" with dim=1536.
+DENSE_EMBEDDING_MODEL = "text-embedding-004"
+DENSE_EMBEDDING_DIM = 768
 
-# Sparse: SPLADE via fastembed -- the standard Haystack hybrid sparse choice.
-# Replaces bge-m3's joint sparse output (which Haystack doesn't support out of the box).
-SPARSE_EMBEDDING_MODEL = "prithivida/Splade_PP_en_v1"
+# Sparse: BM25 via fastembed — pure tokenizer, no neural model, runs in ~1ms on CPU.
+# Provides keyword/exact-match recall for code identifiers. No API cost.
+SPARSE_EMBEDDING_MODEL = "Qdrant/bm25"
 
-# --- Reranker ---
-RERANKER_MODEL = "BAAI/bge-reranker-large"
+# Reranker: disabled — not needed at low query volume. To re-enable, add
+# RERANKER_MODEL = "cohere" and wire CohereRanker in code_pipeline.py.
 
 # --- LLM ---
-# Same as main pipeline. Switch to "gemini-2.5-flash" if Gemma 4 misbehaves.
-LLM_MODEL = "gemma-4-26b-a4b-it"
+# Provider: "google" | "openai" | "anthropic". Swap = change LLM_PROVIDER + LLM_MODEL + env var.
+LLM_PROVIDER = "google"
+LLM_MODEL = "gemini-2.5-flash"
 LLM_TEMPERATURE = 0.2
 LLM_MAX_OUTPUT_TOKENS = 1024
 
-# Cheap+fast model used only to rewrite follow-up questions into standalone form
-# before retrieval. Doesn't need to be smart, just obedient.
+# Cheap+fast model for rewrite/decompose calls (same provider as LLM_PROVIDER).
 REWRITER_MODEL = "gemini-2.5-flash"
 
 # --- Qdrant ---
 QDRANT_URL = "http://localhost:6333"
-# Separate collection so we don't disturb the main pipeline's 'zynd_docs'.
+# Legacy collection name kept for reference; active collections are CODE/DOCS above.
 QDRANT_COLLECTION = "zynd_docs_haystack"
 
 # --- Retrieval ---

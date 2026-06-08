@@ -1,0 +1,60 @@
+services:
+
+  # ── Qdrant (vector DB) ────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST + dashboard
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Build (one-shot: walk code + docs → embed → Qdrant) ──────────────────
+  # Run once: docker compose run --rm build
+  # Re-run whenever code/ or docs/ change.
+  build:
+    build: .
+    command: python build.py
+    env_file: .env
+    volumes:
+      - ./code:/app/code:ro          # source repos (read-only)
+      - ./docs:/app/docs:ro          # markdown docs (read-only)
+      - ./tmp:/app/tmp               # graph pkl + scratch
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    profiles:
+      - build   # only starts with: docker compose --profile build run --rm build
+
+  # ── API server ────────────────────────────────────────────────────────────
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    env_file: .env
+    volumes:
+      - ./code:/app/code:ro
+      - ./docs:/app/docs:ro
+      - ./tmp:/app/tmp:ro            # read graph pkl at startup
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 120s   # models load slowly on CPU first boot
+
+volumes:
+  qdrant_storage:
+  hf_cache:      # ~3.5 GB HuggingFace model weights, persisted across rebuilds
