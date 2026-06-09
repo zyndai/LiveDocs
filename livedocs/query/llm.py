@@ -8,7 +8,7 @@ Supported providers:
 streaming_callback: if provided, the generator will call it with each StreamingChunk
 as tokens arrive. Use the queue bridge in code_pipeline.py for SSE streaming.
 """
-from config import (
+from livedocs.config import (
     LLM_PROVIDER, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_OUTPUT_TOKENS,
     LLM_THINKING_BUDGET,
 )

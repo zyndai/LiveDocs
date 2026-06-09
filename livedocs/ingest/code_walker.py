@@ -7,7 +7,7 @@ raw text. Build-time only -- nothing here runs per query.
 """
 from pathlib import Path
 
-from config import (
+from livedocs.config import (
     CODE_DIR,
     CODE_LANG_BY_EXT,
     CODE_IGNORE_DIRS,

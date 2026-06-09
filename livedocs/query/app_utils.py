@@ -1,5 +1,5 @@
 """Shared serialization helpers used by both code_pipeline and app."""
-from config import REPO_GITHUB_URLS, REPO_GITHUB_BRANCH
+from livedocs.config import REPO_GITHUB_URLS, REPO_GITHUB_BRANCH
 
 
 def _github_url(repo: str, file: str, start_line: int | None, end_line: int | None) -> str | None:

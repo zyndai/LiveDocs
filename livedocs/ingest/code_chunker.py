@@ -13,7 +13,7 @@ import tiktoken
 from tree_sitter import Parser
 from tree_sitter_language_pack import get_language
 
-from config import (
+from livedocs.config import (
     TOKENIZER_ENCODING,
     CODE_MAX_TOKENS,
     CODE_OVERLAP_TOKENS,

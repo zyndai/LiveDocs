@@ -1,30 +1,34 @@
 """One command to build both code and docs knowledge bases.
 
-    python build.py
+    python scripts/build.py            # both code + docs
+    python scripts/build.py --resume   # resume from last checkpoint
 
 Steps:
   1. walk CODE_DIR for source files              (code_walker)
   2. tree-sitter chunk + extract call edges      (code_chunker)
   3. build + serialize the code graph            (code_graph -> tmp/code_graph.pkl)
-  4. embed (bge-m3 + SPLADE) + write Qdrant      collection: codebase_rag
+  4. embed (Gemini dense + BM25 sparse) + write  collection: codebase_rag
   5. parse + chunk DOCS_DIR markdown files       (chunker)
   6. embed + write Qdrant                        collection: docs_rag
 
 Prereqs: Qdrant running on localhost:6333, deps installed, API key in .env.
 Put repos in code/ and .md files in docs/ before running.
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root on path
+
 from dotenv import load_dotenv
 load_dotenv()
 
 from collections import defaultdict
-from pathlib import Path
 
-from code_walker import walk_code
-from code_chunker import chunk_file
-from code_graph import build_graph, save_graph, CodeGraph
-from index import build_code_documents, build_documents, index_documents
-from chunker import parse_docs_tree, chunk_sections
-from config import CODE_QDRANT_COLLECTION, DOCS_QDRANT_COLLECTION, CODE_DIR, DOCS_DIR
+from livedocs.ingest.code_walker import walk_code
+from livedocs.ingest.code_chunker import chunk_file
+from livedocs.ingest.code_graph import build_graph, save_graph, CodeGraph
+from livedocs.ingest.index import build_code_documents, build_documents, index_documents
+from livedocs.ingest.chunker import parse_docs_tree, chunk_sections
+from livedocs.config import CODE_QDRANT_COLLECTION, DOCS_QDRANT_COLLECTION, CODE_DIR, DOCS_DIR
 
 
 def build_code(resume=False):

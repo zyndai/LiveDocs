@@ -25,7 +25,7 @@ import threading
 from dotenv import load_dotenv
 load_dotenv()
 
-from config import (
+from livedocs.config import (
     DENSE_EMBEDDING_MODEL, SPARSE_EMBEDDING_MODEL,
     QDRANT_URL, QDRANT_API_KEY, CODE_QDRANT_COLLECTION, DOCS_QDRANT_COLLECTION,
     RETRIEVE_TOP_K, RERANK_TOP_K, DENSE_EMBEDDING_DIM,
@@ -36,12 +36,12 @@ from haystack.components.builders import ChatPromptBuilder
 from haystack.dataclasses import ChatMessage
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 from haystack_integrations.components.embedders.fastembed import FastembedSparseTextEmbedder
-from gemini_embedder import GeminiTextEmbedder
+from livedocs.ingest.gemini_embedder import GeminiTextEmbedder
 from haystack_integrations.components.retrievers.qdrant import QdrantHybridRetriever
 
-from llm import make_generator, make_lite_client
-from code_graph import CodeGraph
-from app_utils import _github_url
+from livedocs.query.llm import make_generator, make_lite_client
+from livedocs.ingest.code_graph import CodeGraph
+from livedocs.query.app_utils import _github_url
 
 
 SYSTEM_PROMPT = """You are an assistant that answers questions about a codebase and its documentation using the passages provided as context.

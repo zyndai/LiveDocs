@@ -16,7 +16,7 @@ from pathlib import Path
 
 import tiktoken
 
-from config import (
+from livedocs.config import (
     MAX_TOKENS, MIN_TOKENS, OVERLAP_TOKENS, MERGE_STOP_TOKENS,
     TOKENIZER_ENCODING, IGNORE_DIRS,
 )

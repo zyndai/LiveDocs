@@ -18,9 +18,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from chunker import parse_docs_tree, chunk_sections
-from config import (
-    DOCS_DIR,
+from livedocs.ingest.chunker import parse_docs_tree, chunk_sections
+from livedocs.config import (
+    DOCS_DIR, PROJECT_ROOT,
     DENSE_EMBEDDING_MODEL, DENSE_EMBEDDING_DIM, SPARSE_EMBEDDING_MODEL,
     QDRANT_URL, QDRANT_API_KEY, DOCS_QDRANT_COLLECTION,
 )
@@ -30,7 +30,7 @@ from haystack.components.writers import DocumentWriter
 from haystack.utils import Secret
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 from haystack_integrations.components.embedders.fastembed import FastembedSparseDocumentEmbedder
-from gemini_embedder import GeminiDocumentEmbedder
+from livedocs.ingest.gemini_embedder import GeminiDocumentEmbedder
 
 
 def build_documents(chunks):
@@ -91,7 +91,7 @@ def build_code_documents(chunks):
     return docs
 
 
-_CHECKPOINT_DIR = Path(__file__).resolve().parent / "tmp" / "checkpoints"
+_CHECKPOINT_DIR = PROJECT_ROOT / "tmp" / "checkpoints"
 _WRITE_BATCH = 10    # docs per embed+write cycle
 _BATCH_SLEEP = 10    # seconds between batches — keeps Gemini free tier under 30K TPM
 

@@ -1,11 +1,13 @@
-"""Config for the Haystack implementation. Self-contained -- does NOT import
-from the root config.py. ragpipline/ is intended to stand alone."""
+"""Central config + knobs for LiveDocs. Single source of truth for all paths."""
 from pathlib import Path
 
 # --- Paths ---
-HERE = Path(__file__).resolve().parent
+# config.py lives at livedocs/config.py; project root is its grandparent.
+# code/, docs/, tmp/ all live at the project root, not inside the package.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+HERE = PROJECT_ROOT
 # Drop .md files here to index prose docs. No git fetch required.
-DOCS_DIR = HERE / "docs"
+DOCS_DIR = PROJECT_ROOT / "docs"
 
 # --- Docs source (optional remote fetch via fetch_docs.py) ---
 DOCS_REPO_URL = "https://github.com/zyndai/docs"

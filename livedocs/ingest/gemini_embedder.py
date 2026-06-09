@@ -7,7 +7,7 @@ from typing import List
 from haystack import component
 from haystack.dataclasses import Document
 
-from config import DENSE_EMBEDDING_MODEL, DENSE_EMBEDDING_DIM
+from livedocs.config import DENSE_EMBEDDING_MODEL, DENSE_EMBEDDING_DIM
 
 _BATCH_SIZE = 100  # internal chunking for large standalone calls; index_documents controls pacing
 _BASE = "https://generativelanguage.googleapis.com/v1beta/models"

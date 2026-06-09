@@ -23,11 +23,13 @@ Run from inside the ragpipline folder:
 """
 import os
 import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root on path
 
 from dotenv import load_dotenv
 load_dotenv()
 
-from config import (
+from livedocs.config import (
     DENSE_EMBEDDING_MODEL, SPARSE_EMBEDDING_MODEL,
     QDRANT_URL, QDRANT_COLLECTION,
     RETRIEVE_TOP_K, RERANK_TOP_K, RERANKER_MODEL, DENSE_EMBEDDING_DIM,

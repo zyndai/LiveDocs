@@ -99,20 +99,32 @@ is a pure CPU tokenizer.
 
 ## Project layout
 
-| File | Role |
-|---|---|
-| `config.py` | All knobs — paths, models, ports, extensions, graph, GitHub URL map |
-| `code_walker.py` | Walk `code/`, filter by extension, skip junk dirs |
-| `code_chunker.py` | tree-sitter → one chunk per symbol + call/import edges |
-| `code_graph.py` | Build + serialize the call graph (build); O(1) adjacency (runtime) |
-| `chunker.py` | Markdown section parsing + chunking |
-| `gemini_embedder.py` | Dense embeddings via the Gemini SDK directly |
-| `index.py` | Embed (Gemini dense + BM25 sparse) → Qdrant, with batch checkpointing |
-| `build.py` | **One command**: walk → chunk → graph → embed → index |
-| `code_pipeline.py` | Query: rewrite → decompose → retrieve → graph-expand → LLM |
-| `llm.py` | Provider factory (Google / OpenAI / Anthropic) |
-| `app.py` | FastAPI streaming SSE server (`POST /ask/stream`) |
-| `app_utils.py` | Source serialization + GitHub URL generation |
+```
+livedocs/                 Python package
+  config.py               All knobs — paths, models, ports, extensions, graph, GitHub URL map
+  ingest/                 Build-time: turn code + docs into a searchable index
+    code_walker.py          Walk code/, filter by extension, skip junk dirs
+    code_chunker.py         tree-sitter → one chunk per symbol + call/import edges
+    code_graph.py           Build + serialize the call graph; O(1) adjacency at runtime
+    chunker.py              Markdown section parsing + chunking
+    gemini_embedder.py      Dense embeddings via the Gemini SDK directly
+    index.py                Embed (Gemini dense + BM25 sparse) → Qdrant, with checkpointing
+  query/                  Runtime: answer questions
+    code_pipeline.py        rewrite → decompose → retrieve → graph-expand → LLM
+    llm.py                  Provider factory (Google / OpenAI / Anthropic)
+    app.py                  FastAPI streaming SSE server (POST /ask/stream)
+    app_utils.py            Source serialization + GitHub URL generation
+scripts/                  Entry points (run from repo root)
+  build.py                One command: walk → chunk → graph → embed → index
+  fetch_docs.py           Optional: clone/pull a docs repo into docs/
+  check_models.py         Diagnose Gemini embedding access
+  pipeline_legacy.py      Older single-corpus path (kept for reference)
+web/
+  demo.html               Standalone chat UI (point API const at your server)
+code/                     Drop your repos here          (gitignored)
+docs/                     Drop your markdown here        (gitignored)
+tmp/                      Graph pkl + build checkpoints  (gitignored)
+```
 
 ## Prerequisites
 
@@ -136,10 +148,10 @@ cp .env.example .env                 # add your GOOGLE_API_KEY
 docker compose up -d qdrant
 
 # 4. Build the index (re-run when code/docs change)
-python build.py
+python scripts/build.py
 
 # 5. Serve
-uvicorn app:app --port 8002
+uvicorn livedocs.query.app:app --port 8002
 ```
 
 Wait for `Ready.`, then the API is at http://localhost:8002.
@@ -161,10 +173,10 @@ path component under `code/` becomes the **repo** name. Adjust
 ### Build options
 
 ```bash
-python build.py            # build both code + docs
-python build.py --code     # code only
-python build.py --docs     # docs only (wipes + rebuilds docs_rag)
-python build.py --resume   # resume from last checkpoint after a crash
+python scripts/build.py            # build both code + docs
+python scripts/build.py --code     # code only
+python scripts/build.py --docs     # docs only (wipes + rebuilds docs_rag)
+python scripts/build.py --resume   # resume from last checkpoint after a crash
 ```
 
 ## Using the API

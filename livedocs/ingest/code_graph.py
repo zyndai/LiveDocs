@@ -18,7 +18,7 @@ import pickle
 
 import networkx as nx
 
-from config import GRAPH_PATH, GRAPH_EXPAND_HOPS, GRAPH_MAX_NEIGHBORS
+from livedocs.config import GRAPH_PATH, GRAPH_EXPAND_HOPS, GRAPH_MAX_NEIGHBORS
 
 
 def qualified_id(repo, file, symbol):

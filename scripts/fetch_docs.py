@@ -11,7 +11,11 @@ For SSH-based access, set DOCS_REPO_URL in config.py to the SSH form
 import os
 import re
 import subprocess
-from config import DOCS_REPO_URL, DOCS_BRANCH, DOCS_DIR
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root on path
+
+from livedocs.config import DOCS_REPO_URL, DOCS_BRANCH, DOCS_DIR
 
 
 _TOKEN_RE = re.compile(r"(https://[^:/]+:)[^@]+(@)")

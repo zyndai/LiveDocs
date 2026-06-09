@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from code_pipeline import ask_stream, warm_up
+from livedocs.query.code_pipeline import ask_stream, warm_up
 
 
 @asynccontextmanager

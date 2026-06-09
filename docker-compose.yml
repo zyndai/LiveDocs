@@ -21,7 +21,7 @@ services:
   # Re-run whenever code/ or docs/ change.
   build:
     build: .
-    command: python build.py
+    command: python scripts/build.py
     env_file:
       - path: .env
         required: false
