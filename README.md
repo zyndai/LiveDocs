@@ -1,33 +1,66 @@
 <div align="center">
 
-# 🧙 Sourcerer
+# 🧙 LiveDocs
 
-**Ask your codebase anything — graph-aware hybrid RAG over code _and_ docs.**
+**The AI that reads your code so your docs don't have to be perfect.**
 
-Point it at your repos and markdown, run one build command, then ask questions
-in plain English. Answers are grounded in your actual source, cite
-`repo/file.ext:line` (with direct GitHub links), and follow the call graph to
-explain how the pieces connect. Streams token-by-token over SSE.
+Drop a chat box on your docs site that answers from your _actual codebase_ plus
+your structured docs — so users get the latest, deepest answer without waiting
+for the next documentation update. Grounded in real source, cites
+`repo/file.ext:line` with direct GitHub links, follows the call graph, and
+streams token-by-token over SSE.
 
 </div>
 
 ---
 
-## Why Sourcerer
+## The problem
+
+Nobody reads the docs. And the docs are never finished anyway.
+
+Writing and refining SDK + system documentation is slow, and there's _always_
+something missing — an edge case, a new flag, a function that changed last
+sprint. Users hit that gap and file a ticket, or give up. You spend the next
+hackathon patching docs instead of building.
+
+The asymmetry: **your docs lag, but your code is always current.** The answer
+already exists — it's sitting in the source, just not written down yet.
+
+## The idea
+
+Put a chatbot on your docs page that knows **both**:
+
+- **Your codebase** — the latest, deepest source of truth. Updated the moment
+  you push. No waiting for someone to write it up.
+- **Your structured docs** — the curated narrative: getting-started paths,
+  concepts, the "intended" way to use things.
+
+Together they cover each other's weaknesses:
+
+- **Docs incomplete?** The AI fills the gap from the code itself.
+- **Docs wrong or stale?** The code grounds the answer, so the AI self-corrects
+  against what the system _actually_ does — and you can see the mismatch.
+- **Complex / open-ended question?** Users brainstorm and reason with an
+  assistant that has read the whole system, not just one page.
+
+Users stop waiting for doc updates. You stop firefighting doc gaps.
+
+## How LiveDocs delivers it
 
 Most "chat with your code" tools embed files and hope cosine similarity finds
-the right chunk. Sourcerer adds two things that matter:
+the right chunk. LiveDocs adds what makes the answers trustworthy:
 
-- **Code + docs in one answer.** Two corpora (source code and markdown docs),
-  retrieved together, so answers blend "how it's built" with "how it's
-  documented."
-- **Call-graph expansion.** When a code chunk is retrieved, Sourcerer pulls in
-  its 1-hop callers/callees from a precomputed graph — the model sees not just
-  the matched function but the functions around it. Built once, O(1) lookups at
-  query time.
+- **Code + docs in one answer.** Two corpora retrieved together — blends "how
+  it's documented" with "how it's actually built."
+- **Call-graph expansion.** When a code chunk is retrieved, LiveDocs pulls in
+  its 1-hop callers/callees from a precomputed graph, so the model sees the
+  function _and_ everything around it. Built once, O(1) at query time.
+- **Cited, verifiable answers.** Every claim links to `repo/file.ext:line` on
+  GitHub — users (and you) can check the source, which is what makes
+  self-correction against stale docs safe.
 
 Plus the table stakes: hybrid dense + sparse retrieval, compound-question
-decomposition, conversation history, and streaming answers with cited sources.
+decomposition, conversation history, and streaming answers.
 
 ## How it works
 
@@ -244,5 +277,5 @@ MIT — see [`LICENSE`](./LICENSE).
 
 ## Contributing
 
-Issues and PRs welcome. Sourcerer is provider-agnostic by design — new
+Issues and PRs welcome. LiveDocs is provider-agnostic by design — new
 embedding/LLM backends and language grammars are especially appreciated.
