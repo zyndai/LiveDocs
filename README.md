@@ -1,9 +1,33 @@
-# Codebase RAG — vector + graph
+<div align="center">
 
-Chat with your codebase. Drop repos into `code/`, run one build command, then
-ask questions in natural language. Answers are grounded in your actual code,
-cite `repo/file.ext:start-end`, and use a call graph to explain how pieces
-connect. Heavy work happens once at build time; runtime queries are fast.
+# 🧙 Sourcerer
+
+**Ask your codebase anything — graph-aware hybrid RAG over code _and_ docs.**
+
+Point it at your repos and markdown, run one build command, then ask questions
+in plain English. Answers are grounded in your actual source, cite
+`repo/file.ext:line` (with direct GitHub links), and follow the call graph to
+explain how the pieces connect. Streams token-by-token over SSE.
+
+</div>
+
+---
+
+## Why Sourcerer
+
+Most "chat with your code" tools embed files and hope cosine similarity finds
+the right chunk. Sourcerer adds two things that matter:
+
+- **Code + docs in one answer.** Two corpora (source code and markdown docs),
+  retrieved together, so answers blend "how it's built" with "how it's
+  documented."
+- **Call-graph expansion.** When a code chunk is retrieved, Sourcerer pulls in
+  its 1-hop callers/callees from a precomputed graph — the model sees not just
+  the matched function but the functions around it. Built once, O(1) lookups at
+  query time.
+
+Plus the table stakes: hybrid dense + sparse retrieval, compound-question
+decomposition, conversation history, and streaming answers with cited sources.
 
 ## How it works
 
@@ -12,142 +36,213 @@ BUILD (slow, once)                          RUNTIME (fast, per query)
 ──────────────────                          ─────────────────────────
 walk code/  ──► tree-sitter chunk ──┐       question (+ history)
 (py/js/ts/go)   (1 chunk/symbol)    │            │
-                                    ├─► embed  decompose into sub-queries
-                 extract edges ─────┤   bge-m3  (splits "and"/multi-intent)
-                 (calls/imports)    │   +SPLADE      │
-                      │             └─► Qdrant   hybrid search each ──► pool
-                 build graph                         │
-                      │                          rerank pool (cross-encoder)
-                 serialize ──► tmp/code_graph.pkl    │
-                                    ▲           graph expand: 1-hop callers/
-                              loaded into RAM    callees (O(1) RAM lookup)
-                              at server start         │
-                                                 LLM explain + cite file:line
+                                    │       rewrite to standalone (if history)
+                extract call/import │            │
+                edges ──► graph ────┤       decompose compound question
+                     │              │            │
+                serialize           ├──► embed:  hybrid search each sub-query
+                tmp/code_graph.pkl  │    Gemini  over BOTH collections
+                                    │    (dense) │
+parse docs/ ──► section chunk ──────┘    + BM25  merge + dedupe ──► top-k
+(markdown)                               (sparse)     │
+                                              ▲   code hits: 1-hop graph expand
+                                         Qdrant    doc hits: ±1 section expand
+                                       (2 colls)        │
+                                                   LLM explains + cites
+                                                   (streamed via SSE)
 ```
+
+| Component | Build time | Runtime |
+|---|---|---|
+| **Code** | tree-sitter → 1 chunk per function/class/method, extract call+import edges | 1-hop caller/callee expansion |
+| **Docs** | markdown → section chunks | ±1 adjacent-section expansion |
+| **Dense** | Gemini embeddings (`gemini-embedding-2`, 768-dim) | same |
+| **Sparse** | BM25 (fastembed, CPU, ~1ms) — keyword/identifier recall | same |
+| **LLM** | — | Gemini 2.5 Pro (swappable: OpenAI / Anthropic) |
+| **Store** | Qdrant, two collections (`codebase_rag`, `docs_rag`) | hybrid retrieval |
+
+No GPU, no local model downloads — dense embeddings + LLM are API calls, sparse
+is a pure CPU tokenizer.
+
+## Project layout
 
 | File | Role |
 |---|---|
-| `config.py` | All knobs (paths, models, ports, code extensions, graph) |
+| `config.py` | All knobs — paths, models, ports, extensions, graph, GitHub URL map |
 | `code_walker.py` | Walk `code/`, filter by extension, skip junk dirs |
-| `code_chunker.py` | tree-sitter → one chunk per function/class/method + call/import edges |
-| `code_graph.py` | Build + serialize graph (build); O(1) adjacency lookups (runtime) |
-| `index.py` | Embed (bge-m3 dense + SPLADE sparse) → Qdrant |
+| `code_chunker.py` | tree-sitter → one chunk per symbol + call/import edges |
+| `code_graph.py` | Build + serialize the call graph (build); O(1) adjacency (runtime) |
+| `chunker.py` | Markdown section parsing + chunking |
+| `gemini_embedder.py` | Dense embeddings via the Gemini SDK directly |
+| `index.py` | Embed (Gemini dense + BM25 sparse) → Qdrant, with batch checkpointing |
 | `build.py` | **One command**: walk → chunk → graph → embed → index |
-| `code_pipeline.py` | Query: decompose → retrieve → rerank → graph-expand → LLM |
-| `app.py` | FastAPI HTTP wrapper (`POST /ask`) |
+| `code_pipeline.py` | Query: rewrite → decompose → retrieve → graph-expand → LLM |
+| `llm.py` | Provider factory (Google / OpenAI / Anthropic) |
+| `app.py` | FastAPI streaming SSE server (`POST /ask/stream`) |
+| `app_utils.py` | Source serialization + GitHub URL generation |
 
 ## Prerequisites
 
 - **Python 3.12+**
 - **Docker** (for Qdrant)
-- A **Google AI Studio API key** — https://aistudio.google.com/apikey
+- A **Google AI Studio API key** — free at https://aistudio.google.com/apikey
 
-## Setup (once)
+## Quick start
 
 ```bash
+# 1. Install
 python -m venv .venv
 source .venv/bin/activate            # Windows: .\.venv\Scripts\activate
-pip install -r requirements.txt      # ~5 min first time (pulls torch, transformers)
-cp .env.example .env                 # then add your GOOGLE_API_KEY
-```
+pip install -r requirements.txt
+cp .env.example .env                 # add your GOOGLE_API_KEY
 
-## Add your code
+# 2. Add content
+#    drop repos into code/   and   markdown into docs/
 
-Drop any number of repos/folders into `code/`:
+# 3. Start Qdrant
+docker compose up -d qdrant
 
-```
-code/
-  my-backend/
-  my-frontend/
-  some-library/
-```
-
-Indexed file types: `.py .js .jsx .ts .tsx .go`. Junk dirs
-(`node_modules`, `.venv`, `dist`, `build`, `target`, `vendor`, `.git`, …) are
-skipped automatically. Adjust `CODE_LANG_BY_EXT` / `CODE_IGNORE_DIRS` in
-`config.py`.
-
-## Run (three terminals)
-
-### Terminal 1 — Qdrant (vector DB)
-```bash
-docker run -p 6333:6333 -p 6334:6334 \
-    -v ${PWD}/tmp/qdrant_storage:/qdrant/storage \
-    qdrant/qdrant
-```
-Dashboard: http://localhost:6333/dashboard
-
-### Terminal 2 — Build the knowledge base (re-run when code changes)
-```bash
-source .venv/bin/activate
+# 4. Build the index (re-run when code/docs change)
 python build.py
-```
-Walks `code/`, chunks with tree-sitter, builds the graph
-(`tmp/code_graph.pkl`), embeds, and writes Qdrant. First run downloads model
-weights (~3.5 GB) into `~/.cache/huggingface/`. Slow on CPU first time; fast
-after.
 
-### Terminal 3 — Start the API server
-```bash
-source .venv/bin/activate
+# 5. Serve
 uvicorn app:app --port 8002
 ```
-Wait for `Ready.` (loads models + graph into RAM). API at http://localhost:8002.
 
-## Use it
+Wait for `Ready.`, then the API is at http://localhost:8002.
+
+### Adding content
+
+```
+code/                 docs/
+  my-backend/           guide/intro.md
+  my-frontend/          api/reference.md
+  some-library/         ...
+```
+
+Indexed code types: `.py .js .jsx .ts .tsx .go`. Junk dirs (`node_modules`,
+`.venv`, `dist`, `build`, `target`, `vendor`, `.git`, …) are skipped. The first
+path component under `code/` becomes the **repo** name. Adjust
+`CODE_LANG_BY_EXT` / `CODE_IGNORE_DIRS` in `config.py`.
+
+### Build options
 
 ```bash
-curl http://localhost:8002/health
-# -> {"status":"ok","impl":"code-vector-graph"}
+python build.py            # build both code + docs
+python build.py --code     # code only
+python build.py --docs     # docs only (wipes + rebuilds docs_rag)
+python build.py --resume   # resume from last checkpoint after a crash
 ```
 
-Interactive docs: http://localhost:8002/docs → `/ask`.
+## Using the API
 
-```json
-{ "question": "how does auth work and how do I add a new route?" }
+`POST /ask/stream` returns a Server-Sent Events stream:
+
+```
+event: token   data: "partial answer text"
+event: token   data: "..."
+event: meta    data: {"sources":[...], "related":[...], "sub_queries":[...]}
+event: done    data: ""
 ```
 
-Response:
-```json
-{
-  "answer": "... cites my-backend/auth.py:8-15 ...",
-  "sources":     [{ "repo": "...", "file": "...", "symbol": "...", "start_line": 8, "end_line": 15, "score": 0.91 }],
-  "related":     [{ "...": "call-graph neighbors pulled in as context" }],
-  "sub_queries": ["how does auth work?", "how do I add a new route?"]
-}
+```bash
+curl -N -X POST http://localhost:8002/ask/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"question": "how does auth work and how do I add a route?"}'
 ```
 
-Multi-turn: pass prior turns as `history` (same format as the docs pipeline).
-Follow-ups are rewritten to standalone form before retrieval.
+Each source carries `repo`, `file`, `symbol`, `start_line`/`end_line`, a
+relevance `score`, and a `github_url` (when the repo is mapped in
+`REPO_GITHUB_URLS`). Multi-turn: pass prior turns as `history` — follow-ups are
+rewritten to standalone form before retrieval.
 
-## Key config knobs (`config.py`)
+**Full frontend integration guide** (React hook + vanilla JS + every event
+shape): see [`INTEGRATION.md`](./INTEGRATION.md).
+
+## Configuration
+
+Key knobs in `config.py`:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `CODE_DIR` | `./code` | Where your repos live |
+| `CODE_DIR` / `DOCS_DIR` | `./code` / `./docs` | Where source + docs live |
 | `CODE_LANG_BY_EXT` | py/js/ts/go | Extensions → tree-sitter grammar |
-| `CODE_MAX_TOKENS` | `1000` | Max tokens per symbol chunk (oversized split) |
-| `GRAPH_EXPAND_HOPS` | `1` | Call-graph hops pulled in as context |
+| `GRAPH_EXPAND_HOPS` | `1` | Call-graph hops pulled as context |
 | `GRAPH_MAX_NEIGHBORS` | `6` | Cap neighbors per hit |
 | `MAX_SUBQUERIES` | `4` | Cap on compound-question fan-out |
-| `RETRIEVE_TOP_K` | `10` | Chunks retrieved per sub-query |
-| `RERANK_TOP_K` | `5` | Chunks the LLM sees |
-| `LLM_MODEL` | `gemma-4-26b-a4b-it` | Switch to `gemini-2.5-flash` for faster/cheaper |
-| `CODE_QDRANT_COLLECTION` | `codebase_rag` | Qdrant collection name |
+| `RETRIEVE_TOP_K` / `RERANK_TOP_K` | `10` / `5` | Retrieved per query / sent to LLM |
+| `LLM_PROVIDER` / `LLM_MODEL` | `google` / `gemini-2.5-pro` | Swap provider + model |
+| `LLM_MAX_OUTPUT_TOKENS` | `8192` | Output budget (thinking models need headroom) |
+| `LLM_THINKING_BUDGET` | `1024` | Cap reasoning tokens (Gemini 2.5 thinking) |
+| `REPO_GITHUB_URLS` | `{}` | Map repo name → GitHub base URL for citation links |
 
-## Updating after code changes
+### GitHub citation links
+
+```python
+# config.py
+REPO_GITHUB_URLS = {
+    "my-backend": "https://github.com/your-org/my-backend",
+}
+REPO_GITHUB_BRANCH = "main"   # or per-repo: {"my-backend": "develop"}
+```
+
+Citations become `https://github.com/your-org/my-backend/blob/main/path.py#L8-L15`.
+Computed at query time — no reindex needed when you change the map.
+
+### Switching LLM provider
+
+```python
+# config.py
+LLM_PROVIDER = "anthropic"          # "google" | "openai" | "anthropic"
+LLM_MODEL    = "claude-sonnet-4-6"
+```
+Set the matching key (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) in `.env`.
+Embeddings always use Gemini, so `GOOGLE_API_KEY` stays required.
+
+## Deployment
+
+Full stack (Qdrant + API) via Docker Compose:
 
 ```bash
-source .venv/bin/activate
-python build.py        # re-walk + re-chunk + rebuild graph + re-embed
+docker compose --profile build run --rm build   # one-shot index build
+docker compose up -d qdrant app                  # serve (localhost-bound)
 ```
-Restart the server so it reloads the new graph into RAM.
+
+Behind a domain with auto-TLS via Caddy — **`flush_interval -1` is required**
+or SSE buffers and the answer only appears once it's fully done:
+
+```caddyfile
+docs.example.com {
+    encode gzip
+    handle /ask/stream* {
+        reverse_proxy 127.0.0.1:8002 {
+            flush_interval -1
+            transport http { read_timeout 0 }
+        }
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8002
+    }
+}
+```
 
 ## Troubleshooting
 
-- **`CODE_DIR not found`** — create `code/` and drop repos in it.
-- **`No chunks produced`** — `code/` has no `.py/.js/.ts/.go` files (or all in ignored dirs).
-- **`GOOGLE_API_KEY not set`** — copy `.env.example` → `.env`, add your key.
-- **`Connection refused` to Qdrant** — Qdrant container isn't running (Terminal 1).
-- **No graph expansion** — `tmp/code_graph.pkl` missing; run `build.py`.
-- **`500 INTERNAL` from LLM** — set `LLM_MODEL = "gemini-2.5-flash"`, restart server.
+| Symptom | Fix |
+|---|---|
+| `GOOGLE_API_KEY not set` | Copy `.env.example` → `.env`, add your key |
+| `Connection refused` to Qdrant | `docker compose up -d qdrant` |
+| `No chunks produced` | `code/` has no indexable files (or all in ignored dirs) |
+| No graph expansion | `tmp/code_graph.pkl` missing — run `build.py` |
+| Empty answer, only Sources shown | `LLM_MAX_OUTPUT_TOKENS` too low for a thinking model — raise it (default is now 8192) |
+| Answer appears only when complete (no streaming) | Proxy buffering — set Caddy `flush_interval -1` / nginx `proxy_buffering off` |
+| Hitting Gemini free-tier rate limits on build | Increase `_BATCH_SLEEP` in `index.py` |
+
+## License
+
+MIT — see [`LICENSE`](./LICENSE).
+
+## Contributing
+
+Issues and PRs welcome. Sourcerer is provider-agnostic by design — new
+embedding/LLM backends and language grammars are especially appreciated.
