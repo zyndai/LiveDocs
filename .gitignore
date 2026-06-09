@@ -19,6 +19,10 @@ tmp/
 code/
 docs/
 
+# Dashboard runtime config (contains API keys — never commit)
+config/settings.json
+config/jobs.json
+
 # IDE
 .vscode/
 .idea/

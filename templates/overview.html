@@ -1,0 +1,125 @@
+{% extends "layout.html" %}
+{% block title %}Overview{% endblock %}
+{% block page_title %}Overview{% endblock %}
+
+{% block content %}
+{% set active = 'overview' %}
+
+<!-- Stat tiles -->
+<div class="grid-3" style="margin-bottom:20px;">
+  <div class="stat-tile">
+    <div class="stat-label">Status</div>
+    <div class="stat-value">
+      {% if deployed %}
+        <span style="color:var(--success)">Live</span>
+      {% else %}
+        <span style="color:var(--warning)">Offline</span>
+      {% endif %}
+    </div>
+    <div class="stat-sub">
+      {% if last_build %}
+        Last build: {{ last_build.status }}
+      {% else %}
+        No build yet
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="stat-tile">
+    <div class="stat-label">Sources</div>
+    <div class="stat-value">{{ sources | length }}</div>
+    <div class="stat-sub">
+      {{ sources | selectattr('corpus', 'equalto', 'code') | list | length }} code,
+      {{ sources | selectattr('corpus', 'equalto', 'docs') | list | length }} docs
+    </div>
+  </div>
+
+  <div class="stat-tile">
+    <div class="stat-label">Qdrant</div>
+    <div class="stat-value">
+      {% if qdrant_ok %}
+        <span style="color:var(--success)">OK</span>
+      {% else %}
+        <span style="color:var(--error)">Down</span>
+      {% endif %}
+    </div>
+    <div class="stat-sub">Vector store</div>
+  </div>
+</div>
+
+<!-- Quick actions -->
+{% if not deployed %}
+<div class="alert alert-warning">
+  No successful build yet. <a href="/dashboard/build" style="font-weight:600;">Start a build</a> to bring the API endpoints online.
+</div>
+{% endif %}
+
+<!-- API Endpoints -->
+<div class="card">
+  <div class="card-title">API Endpoints <small>— embed in your docs site</small></div>
+
+  <div class="form-group">
+    <label>Streaming (SSE) — recommended for chat</label>
+    <div class="snippet-box">POST {{ api_base }}/ask/stream
+
+Content-Type: application/json
+{"question": "how does X work?", "history": []}</div>
+  </div>
+
+  <div class="form-group">
+    <label>Non-streaming — simple integration</label>
+    <div class="snippet-box">POST {{ api_base }}/ask
+
+Content-Type: application/json
+{"question": "how does X work?", "history": []}</div>
+  </div>
+
+  <div class="form-group">
+    <label>Chat widget (drop in your HTML)</label>
+    <div class="snippet-box">&lt;!-- LiveDocs chat widget --&gt;
+&lt;script&gt;
+  window.LIVEDOCS_API = "{{ api_base }}";
+&lt;/script&gt;
+&lt;script src="{{ api_base }}/static/widget.js" defer&gt;&lt;/script&gt;</div>
+  </div>
+</div>
+
+<!-- Sources summary -->
+{% if sources %}
+<div class="card">
+  <div class="card-title">Sources</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Corpus</th>
+        <th>Kind</th>
+        <th>Status</th>
+        <th>Chunks</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for src in sources %}
+      <tr>
+        <td><strong>{{ src.name }}</strong></td>
+        <td><span class="badge badge-gray">{{ src.corpus }}</span></td>
+        <td>{{ src.kind }}</td>
+        <td>
+          {% if src.status == 'indexed' %}
+            <span class="badge badge-green">indexed</span>
+          {% elif src.status == 'error' %}
+            <span class="badge badge-red" title="{{ src.error }}">error</span>
+          {% elif src.status == 'cloning' %}
+            <span class="badge badge-blue">cloning</span>
+          {% else %}
+            <span class="badge badge-yellow">{{ src.status }}</span>
+          {% endif %}
+        </td>
+        <td>{{ src.counts.get('chunks', '—') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

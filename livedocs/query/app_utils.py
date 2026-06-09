@@ -1,19 +1,21 @@
-"""Shared serialization helpers used by both code_pipeline and app."""
-from livedocs.config import REPO_GITHUB_URLS, REPO_GITHUB_BRANCH
+"""Shared serialization helpers used by code_pipeline and app."""
 
 
-def _github_url(repo: str, file: str, start_line: int | None, end_line: int | None) -> str | None:
-    """Build a GitHub blob URL for a code chunk, or None if repo not mapped."""
-    base = REPO_GITHUB_URLS.get(repo)
+def _github_url(repo: str, file: str, start_line, end_line) -> str | None:
+    from livedocs.settings import get_settings
+    s = get_settings()
+    urls = {}
+    branches = {}
+    for src in s.sources:
+        if src.get("corpus") == "code" and src.get("github_base"):
+            name = src["name"]
+            urls[name] = src["github_base"]
+            branches[name] = src.get("branch", "main")
+
+    base = urls.get(repo)
     if not base:
         return None
-    branch = (
-        REPO_GITHUB_BRANCH.get(repo, "main")
-        if isinstance(REPO_GITHUB_BRANCH, dict)
-        else REPO_GITHUB_BRANCH
-    )
-    # file includes the repo prefix (e.g. "AgentDNS/internal/mesh/federated.go");
-    # strip it to get the within-repo path.
+    branch = branches.get(repo, "main")
     within_repo = file[len(repo) + 1:] if file.startswith(repo + "/") else file
     url = f"{base.rstrip('/')}/blob/{branch}/{within_repo}"
     if start_line is not None:

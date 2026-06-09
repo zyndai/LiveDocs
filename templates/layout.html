@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}LiveDocs{% endblock %} — LiveDocs</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js" defer></script>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <a href="/dashboard">LiveDocs</a>
+    <div class="tagline">RAG Dashboard</div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <a href="/dashboard" class="{% if active == 'overview' %}active{% endif %}">
+      <span class="icon">◈</span> Overview
+    </a>
+    <a href="/dashboard/settings" class="{% if active == 'settings' %}active{% endif %}">
+      <span class="icon">⚙</span> Settings
+    </a>
+    <a href="/dashboard/sources" class="{% if active == 'sources' %}active{% endif %}">
+      <span class="icon">⊕</span> Sources
+    </a>
+    <a href="/dashboard/build" class="{% if active == 'build' %}active{% endif %}">
+      <span class="icon">▶</span> Build
+    </a>
+    <a href="/dashboard/chat" class="{% if active == 'chat' %}active{% endif %}">
+      <span class="icon">◉</span> Chat
+    </a>
+  </nav>
+
+  <div class="sidebar-status">
+    <div class="status-row">
+      <span class="dot {% if qdrant_ok %}dot-green{% else %}dot-red{% endif %}"></span>
+      Qdrant {% if qdrant_ok %}connected{% else %}offline{% endif %}
+    </div>
+    <div class="status-row">
+      {% if job and job.status == 'running' %}
+        <span class="dot dot-blue"></span> Building ({{ job.phase }})
+      {% elif deployed %}
+        <span class="dot dot-green"></span> Deployed
+      {% else %}
+        <span class="dot dot-yellow"></span> Not deployed
+      {% endif %}
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+  <div class="topbar">
+    <div class="topbar-title">{% block page_title %}{% endblock %}</div>
+    <div class="flex items-center gap-3">
+      {% if deployed %}
+        <span class="badge badge-green">● Live</span>
+      {% else %}
+        <span class="badge badge-yellow">⚠ Needs build</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="page-content">
+    {% block content %}{% endblock %}
+  </div>
+</main>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

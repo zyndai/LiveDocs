@@ -7,9 +7,7 @@ from typing import List
 from haystack import component
 from haystack.dataclasses import Document
 
-from livedocs.config import DENSE_EMBEDDING_MODEL, DENSE_EMBEDDING_DIM
-
-_BATCH_SIZE = 100  # internal chunking for large standalone calls; index_documents controls pacing
+_BATCH_SIZE = 100
 _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _MAX_RETRIES = 6
 
@@ -32,19 +30,19 @@ def _post(url, body, timeout):
             continue
         resp.raise_for_status()
         return resp
-    resp.raise_for_status()  # raise on final attempt
+    resp.raise_for_status()
 
 
-def _embed_single(text: str, model: str) -> List[float]:
+def _embed_single(text: str, model: str, dim: int) -> List[float]:
     resp = _post(
         f"{_BASE}/{model}:embedContent",
-        {"content": {"parts": [{"text": text}]}, "outputDimensionality": DENSE_EMBEDDING_DIM},
+        {"content": {"parts": [{"text": text}]}, "outputDimensionality": dim},
         timeout=30,
     )
     return resp.json()["embedding"]["values"]
 
 
-def _embed_batch(texts: List[str], model: str) -> List[List[float]]:
+def _embed_batch(texts: List[str], model: str, dim: int) -> List[List[float]]:
     resp = _post(
         f"{_BASE}/{model}:batchEmbedContents",
         {
@@ -52,7 +50,7 @@ def _embed_batch(texts: List[str], model: str) -> List[List[float]]:
                 {
                     "model": f"models/{model}",
                     "content": {"parts": [{"text": t}]},
-                    "outputDimensionality": DENSE_EMBEDDING_DIM,
+                    "outputDimensionality": dim,
                 }
                 for t in texts
             ]
@@ -66,18 +64,19 @@ def _embed_batch(texts: List[str], model: str) -> List[List[float]]:
 class GeminiDocumentEmbedder:
     """Embeds Documents via Gemini batchEmbedContents REST endpoint. Build-time."""
 
-    def __init__(self, model: str = DENSE_EMBEDDING_MODEL):
+    def __init__(self, model: str = "gemini-embedding-2", dim: int = 768):
         self.model = model
+        self.dim = dim
 
     def warm_up(self):
-        pass  # requests uses per-call connections; nothing to initialize
+        pass
 
     @component.output_types(documents=List[Document])
     def run(self, documents: List[Document]):
         for i in range(0, len(documents), _BATCH_SIZE):
-            batch = documents[i : i + _BATCH_SIZE]
+            batch = documents[i: i + _BATCH_SIZE]
             texts = [d.content or "" for d in batch]
-            embeddings = _embed_batch(texts, self.model)
+            embeddings = _embed_batch(texts, self.model, self.dim)
             for doc, emb in zip(batch, embeddings):
                 doc.embedding = emb
         return {"documents": documents}
@@ -87,12 +86,13 @@ class GeminiDocumentEmbedder:
 class GeminiTextEmbedder:
     """Embeds single query string via Gemini embedContent REST endpoint. Query-time."""
 
-    def __init__(self, model: str = DENSE_EMBEDDING_MODEL):
+    def __init__(self, model: str = "gemini-embedding-2", dim: int = 768):
         self.model = model
+        self.dim = dim
 
     def warm_up(self):
         pass
 
     @component.output_types(embedding=List[float])
     def run(self, text: str):
-        return {"embedding": _embed_single(text, self.model)}
+        return {"embedding": _embed_single(text, self.model, self.dim)}

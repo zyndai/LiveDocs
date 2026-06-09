@@ -1,0 +1,197 @@
+{% extends "layout.html" %}
+{% block title %}Settings{% endblock %}
+{% block page_title %}Settings{% endblock %}
+
+{% block content %}
+{% set active = 'settings' %}
+
+{% if saved %}
+<div class="alert alert-success">
+  Settings saved.
+  {% if needs_reindex %}
+  <strong>Embedding config changed — a full rebuild is required before the new embedding takes effect.</strong>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/dashboard/settings">
+
+<!-- LLM -->
+<div class="card">
+  <div class="card-title">LLM Provider</div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Provider</label>
+      <select name="llm_provider" id="llm_provider" onchange="updateLLMModels()">
+        <option value="google"    {% if s.llm.provider == 'google'    %}selected{% endif %}>Google Gemini</option>
+        <option value="openai"    {% if s.llm.provider == 'openai'    %}selected{% endif %}>OpenAI</option>
+        <option value="anthropic" {% if s.llm.provider == 'anthropic' %}selected{% endif %}>Anthropic Claude</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Model</label>
+      <input type="text" name="llm_model" id="llm_model" value="{{ s.llm.model }}" placeholder="e.g. gemini-2.5-pro">
+      <div class="help-text" id="llm_model_hint"></div>
+    </div>
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Rewriter model <span class="text-muted">(fast, cheap)</span></label>
+      <input type="text" name="llm_rewriter_model" value="{{ s.llm.rewriter_model }}" placeholder="e.g. gemini-2.5-flash">
+    </div>
+    <div class="form-group">
+      <label>Temperature</label>
+      <input type="number" name="llm_temperature" value="{{ s.llm.temperature }}" min="0" max="2" step="0.05">
+    </div>
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Max output tokens</label>
+      <input type="number" name="llm_max_output_tokens" value="{{ s.llm.max_output_tokens }}" min="256" max="32768">
+    </div>
+    <div class="form-group">
+      <label>Thinking budget <span class="text-muted">(Gemini 2.5 only)</span></label>
+      <input type="number" name="llm_thinking_budget" value="{{ s.llm.thinking_budget }}" min="-1" max="8192">
+      <div class="help-text">-1 = dynamic. Ignored for non-thinking models.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Embedding -->
+<div class="card">
+  <div class="card-title">Embedding Provider <small>— changing model/provider requires a full rebuild</small></div>
+
+  <div class="form-row-3">
+    <div class="form-group">
+      <label>Provider</label>
+      <select name="emb_provider" id="emb_provider" onchange="updateEmbPreset()">
+        <option value="google" {% if s.embedding.provider == 'google' %}selected{% endif %}>Google Gemini</option>
+        <option value="openai" {% if s.embedding.provider == 'openai' %}selected{% endif %}>OpenAI</option>
+        <option value="local"  {% if s.embedding.provider == 'local'  %}selected{% endif %}>Local (bge-m3, CPU)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Model</label>
+      <input type="text" name="emb_model" id="emb_model" value="{{ s.embedding.model }}">
+    </div>
+    <div class="form-group">
+      <label>Vector dim</label>
+      <input type="number" name="emb_dim" id="emb_dim" value="{{ s.embedding.dim }}" min="64" max="4096">
+    </div>
+  </div>
+</div>
+
+<!-- API Keys -->
+<div class="card">
+  <div class="card-title">API Keys</div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Google API Key <span class="text-muted">(Gemini)</span></label>
+      <input type="password" name="google_api_key" value="{{ s.keys.GOOGLE_API_KEY }}" placeholder="AIza...">
+      <div class="help-text">Required if provider = Google.</div>
+    </div>
+    <div class="form-group">
+      <label>OpenAI API Key</label>
+      <input type="password" name="openai_api_key" value="{{ s.keys.OPENAI_API_KEY }}" placeholder="sk-...">
+    </div>
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Anthropic API Key</label>
+      <input type="password" name="anthropic_api_key" value="{{ s.keys.ANTHROPIC_API_KEY }}" placeholder="sk-ant-...">
+    </div>
+    <div></div>
+  </div>
+</div>
+
+<!-- Qdrant -->
+<div class="card">
+  <div class="card-title">Qdrant</div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>URL</label>
+      <input type="text" name="qdrant_url" value="{{ s.qdrant.url }}" placeholder="http://localhost:6333">
+    </div>
+    <div class="form-group">
+      <label>API Key <span class="text-muted">(Qdrant Cloud only)</span></label>
+      <input type="password" name="qdrant_api_key" value="{{ s.qdrant.api_key or '' }}" placeholder="optional">
+    </div>
+  </div>
+</div>
+
+<!-- Retrieval / Graph knobs -->
+<details>
+  <summary style="cursor:pointer;font-size:13.5px;font-weight:600;color:var(--muted);padding:8px 0;margin-bottom:12px;">
+    Advanced — Retrieval &amp; Graph
+  </summary>
+
+  <div class="card">
+    <div class="card-title">Retrieval</div>
+    <div class="form-row-3">
+      <div class="form-group">
+        <label>Retrieve top-k</label>
+        <input type="number" name="retrieve_top_k" value="{{ s.retrieval.retrieve_top_k }}" min="1" max="100">
+      </div>
+      <div class="form-group">
+        <label>Rerank top-k</label>
+        <input type="number" name="rerank_top_k" value="{{ s.retrieval.rerank_top_k }}" min="1" max="50">
+      </div>
+      <div class="form-group">
+        <label>Max sub-queries</label>
+        <input type="number" name="max_subqueries" value="{{ s.retrieval.max_subqueries }}" min="1" max="10">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Code Graph Expansion</div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Hops</label>
+        <input type="number" name="graph_expand_hops" value="{{ s.graph.expand_hops }}" min="0" max="3">
+      </div>
+      <div class="form-group">
+        <label>Max neighbors per hit</label>
+        <input type="number" name="graph_max_neighbors" value="{{ s.graph.max_neighbors }}" min="1" max="20">
+      </div>
+    </div>
+  </div>
+</details>
+
+<button type="submit" class="btn btn-primary">Save Settings</button>
+
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const LLM_SUGGESTIONS = {{ llm_suggestions | tojson }};
+const EMB_PRESETS = {{ embedding_presets | tojson }};
+
+function updateLLMModels() {
+  const p = document.getElementById('llm_provider').value;
+  const hints = (LLM_SUGGESTIONS[p] || []).join(' / ');
+  document.getElementById('llm_model_hint').textContent = hints ? 'Suggestions: ' + hints : '';
+}
+
+function updateEmbPreset() {
+  const p = document.getElementById('emb_provider').value;
+  const preset = EMB_PRESETS[p];
+  if (preset) {
+    document.getElementById('emb_model').value = preset[0];
+    document.getElementById('emb_dim').value = preset[1];
+  }
+}
+
+updateLLMModels();
+</script>
+{% endblock %}

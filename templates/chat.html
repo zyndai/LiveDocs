@@ -1,0 +1,140 @@
+{% extends "layout.html" %}
+{% block title %}Chat{% endblock %}
+{% block page_title %}Chat Playground{% endblock %}
+
+{% block content %}
+{% set active = 'chat' %}
+
+{% if not deployed %}
+<div class="alert alert-warning">
+  No successful build. <a href="/dashboard/build">Run a build first</a> before chatting.
+</div>
+{% endif %}
+
+<div class="chat-wrap">
+  <div class="chat-messages" id="chat-messages">
+    <div class="msg msg-assistant">
+      Hi! Ask me anything about your codebase or documentation.
+    </div>
+  </div>
+
+  <div class="chat-input-row">
+    <input type="text" id="chat-input" placeholder="Ask a question…"
+           {% if not deployed %}disabled{% endif %}
+           autocomplete="off">
+    <button class="btn btn-primary" id="send-btn"
+            {% if not deployed %}disabled{% endif %}
+            onclick="sendMessage()">Send</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const API_BASE = "{{ api_base }}";
+let history = [];
+
+const input = document.getElementById('chat-input');
+const messages = document.getElementById('chat-messages');
+
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+function appendMsg(role, text, sources) {
+  const div = document.createElement('div');
+  div.className = 'msg msg-' + role;
+  div.textContent = text;
+
+  if (sources && sources.length) {
+    const src = document.createElement('div');
+    src.className = 'msg-sources';
+    src.textContent = 'Sources: ' + sources.map(s => s.github_url || s.file || s.source || '?').join(' · ');
+    div.appendChild(src);
+  }
+
+  messages.appendChild(div);
+  messages.scrollTop = messages.scrollHeight;
+  return div;
+}
+
+async function sendMessage() {
+  const q = input.value.trim();
+  if (!q) return;
+
+  input.value = '';
+  appendMsg('user', q);
+  history.push({role: 'user', content: q});
+
+  const placeholder = appendMsg('assistant', '…');
+
+  let answer = '';
+  let metaReceived = null;
+
+  try {
+    const resp = await fetch(API_BASE + '/ask/stream', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question: q, history: history.slice(0, -1)}),
+    });
+
+    if (!resp.ok) {
+      placeholder.textContent = `Error ${resp.status}: ${await resp.text()}`;
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, {stream: true});
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+
+      for (const part of parts) {
+        const lines = part.split('\n');
+        const eventLine = lines.find(l => l.startsWith('event:'));
+        const dataLine  = lines.find(l => l.startsWith('data:'));
+        if (!dataLine) continue;
+
+        const event = eventLine ? eventLine.slice(6).trim() : 'message';
+        const data  = dataLine.slice(5).trim();
+
+        if (event === 'token' || event === 'message') {
+          try { answer += JSON.parse(data); } catch { answer += data; }
+          placeholder.childNodes[0]
+            ? (placeholder.childNodes[0].nodeValue = answer)
+            : (placeholder.textContent = answer);
+        } else if (event === 'meta') {
+          try { metaReceived = JSON.parse(data); } catch {}
+        } else if (event === 'done') {
+          break;
+        } else if (event === 'error') {
+          try { answer = 'Error: ' + JSON.parse(data).detail; } catch { answer = data; }
+          placeholder.textContent = answer;
+        }
+      }
+    }
+
+    if (metaReceived && metaReceived.sources && metaReceived.sources.length) {
+      const src = document.createElement('div');
+      src.className = 'msg-sources';
+      src.textContent = 'Sources: ' +
+        metaReceived.sources.map(s => s.github_url || s.file || s.source || '?').join(' · ');
+      placeholder.appendChild(src);
+    }
+
+    history.push({role: 'assistant', content: answer});
+
+  } catch (err) {
+    placeholder.textContent = 'Network error: ' + err.message;
+  }
+
+  messages.scrollTop = messages.scrollHeight;
+}
+</script>
+{% endblock %}

@@ -1,0 +1,190 @@
+{% extends "layout.html" %}
+{% block title %}Sources{% endblock %}
+{% block page_title %}Sources{% endblock %}
+
+{% block content %}
+{% set active = 'sources' %}
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<!-- Sources table -->
+{% if sources %}
+<div class="card">
+  <div class="card-title">
+    Indexed Sources
+    <small>— {{ sources | length }} total</small>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Corpus</th>
+        <th>Kind</th>
+        <th>URL / Path</th>
+        <th>Branch</th>
+        <th>Status</th>
+        <th>Chunks</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for src in sources %}
+      <tr>
+        <td><strong>{{ src.name }}</strong></td>
+        <td><span class="badge badge-gray">{{ src.corpus }}</span></td>
+        <td>{{ src.kind }}</td>
+        <td class="text-muted text-sm" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ src.url }}">
+          {{ src.url }}
+        </td>
+        <td>{{ src.branch or '—' }}</td>
+        <td>
+          {% if src.status == 'indexed' %}
+            <span class="badge badge-green">indexed</span>
+          {% elif src.status == 'cloned' %}
+            <span class="badge badge-blue">cloned</span>
+          {% elif src.status == 'cloning' %}
+            <span class="badge badge-blue">cloning…</span>
+          {% elif src.status == 'error' %}
+            <span class="badge badge-red" title="{{ src.get('error','') }}">error</span>
+          {% else %}
+            <span class="badge badge-yellow">{{ src.status }}</span>
+          {% endif %}
+        </td>
+        <td>{{ src.counts.get('chunks', '—') }}</td>
+        <td>
+          <form method="post" action="/dashboard/sources/{{ src.id }}/delete"
+                onsubmit="return confirm('Delete {{ src.name }}? This removes the record and any cloned files.')">
+            <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- Add source tabs -->
+<div class="card">
+  <div class="card-title">Add Source</div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="showTab('github', this)">GitHub Repo</button>
+    <button class="tab-btn" onclick="showTab('upload', this)">Upload Files</button>
+    <button class="tab-btn" onclick="showTab('local', this)">Local Path</button>
+  </div>
+
+  <!-- GitHub -->
+  <div class="tab-panel active" id="tab-github">
+    <form method="post" action="/dashboard/sources/github">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Name <span class="text-muted">(used as folder name in code/ or docs/)</span></label>
+          <input type="text" name="name" required placeholder="MyRepo">
+        </div>
+        <div class="form-group">
+          <label>Corpus</label>
+          <select name="corpus">
+            <option value="code">Code</option>
+            <option value="docs">Docs</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>GitHub URL</label>
+        <input type="url" name="url" required placeholder="https://github.com/org/repo">
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label>Branch</label>
+          <input type="text" name="branch" value="main" placeholder="main">
+        </div>
+        <div class="form-group">
+          <label>GitHub base URL <span class="text-muted">(for citation links, auto-derived if blank)</span></label>
+          <input type="text" name="github_base" placeholder="https://github.com/org/repo">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>GitHub Token <span class="text-muted">(private repos only)</span></label>
+        <input type="password" name="token" placeholder="ghp_...">
+      </div>
+
+      <button type="submit" class="btn btn-primary">Add GitHub Source</button>
+    </form>
+  </div>
+
+  <!-- Upload -->
+  <div class="tab-panel" id="tab-upload">
+    <form method="post" action="/dashboard/sources/upload" enctype="multipart/form-data">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" name="name" required placeholder="my-docs">
+        </div>
+        <div class="form-group">
+          <label>Corpus</label>
+          <select name="corpus">
+            <option value="docs">Docs</option>
+            <option value="code">Code</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>File</label>
+        <input type="file" name="file" accept=".zip,.md" required>
+        <div class="help-text">Upload a .zip archive or a single .md file.</div>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Upload</button>
+    </form>
+  </div>
+
+  <!-- Local -->
+  <div class="tab-panel" id="tab-local">
+    <form method="post" action="/dashboard/sources/local">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" name="name" required placeholder="my-service">
+        </div>
+        <div class="form-group">
+          <label>Corpus</label>
+          <select name="corpus">
+            <option value="code">Code</option>
+            <option value="docs">Docs</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>Absolute path on server</label>
+        <input type="text" name="path" required placeholder="/home/user/repos/my-service">
+      </div>
+
+      <div class="alert alert-info" style="margin-top:0">
+        Local sources register the directory as-is. The build will read directly from this path.
+        It will not be copied.
+      </div>
+
+      <button type="submit" class="btn btn-primary">Register Local Source</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showTab(id, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  btn.classList.add('active');
+}
+</script>
+{% endblock %}

@@ -1,0 +1,158 @@
+{% extends "layout.html" %}
+{% block title %}Build{% endblock %}
+{% block page_title %}Build{% endblock %}
+
+{% block content %}
+{% set active = 'build' %}
+
+{% if start_error %}
+<div class="alert alert-error">{{ start_error }}</div>
+{% endif %}
+
+<div class="grid-2">
+
+  <!-- Controls -->
+  <div>
+    <div class="card">
+      <div class="card-title">Start Build</div>
+
+      {% if job and job.status == 'running' %}
+        <div class="alert alert-info">
+          Build in progress — <strong>{{ job.phase }}</strong>. Scroll down for live log.
+        </div>
+        <button class="btn btn-ghost" disabled>Build running…</button>
+      {% else %}
+        <form method="post" action="/dashboard/build/start">
+          <div class="form-group">
+            <label>What to build</label>
+            <select name="corpus">
+              <option value="both">Both (code + docs)</option>
+              <option value="code">Code only</option>
+              <option value="docs">Docs only</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:6px;">
+              <input type="checkbox" name="resume" value="true">
+              Resume from last checkpoint
+            </label>
+            <div class="help-text">Skip batches already written. Useful after a crash.</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">▶ Start Build</button>
+        </form>
+      {% endif %}
+    </div>
+
+    <!-- Status card -->
+    {% if job %}
+    <div class="card" id="status-card">
+      <div class="card-title">Current Job</div>
+      <table>
+        <tr>
+          <td class="text-muted" style="width:120px">ID</td>
+          <td><code>{{ job.id }}</code></td>
+        </tr>
+        <tr>
+          <td class="text-muted">Status</td>
+          <td>
+            {% if job.status == 'running' %}
+              <span class="badge badge-blue">● running</span>
+            {% elif job.status == 'done' %}
+              <span class="badge badge-green">✓ done</span>
+            {% else %}
+              <span class="badge badge-red">✗ {{ job.status }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td class="text-muted">Phase</td>
+          <td>{{ job.phase }}</td>
+        </tr>
+        <tr>
+          <td class="text-muted">Corpus</td>
+          <td>{{ job.corpus }}</td>
+        </tr>
+        {% if job.error %}
+        <tr>
+          <td class="text-muted">Error</td>
+          <td style="color:var(--error)">{{ job.error }}</td>
+        </tr>
+        {% endif %}
+        {% if job.counts %}
+        <tr>
+          <td class="text-muted">Counts</td>
+          <td><code>{{ job.counts }}</code></td>
+        </tr>
+        {% endif %}
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Log panel -->
+  <div>
+    <div class="card">
+      <div class="card-title flex justify-between items-center">
+        <span>Build Log</span>
+        {% if job and job.status == 'running' %}
+          <span class="badge badge-blue" id="live-badge">● Live</span>
+        {% endif %}
+      </div>
+
+      <div class="log-box" id="log-box">{% for line in log_history %}{{ line }}
+{% endfor %}</div>
+
+      {% if job and job.status == 'running' %}
+      <p class="text-muted text-sm mt-2">Streaming live from the build worker…</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const logBox = document.getElementById('log-box');
+const liveBadge = document.getElementById('live-badge');
+
+if (logBox) {
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+{% if job and job.status == 'running' %}
+const es = new EventSource('/dashboard/build/stream');
+
+es.onmessage = function(e) {
+  if (!e.data) return;
+  const line = document.createElement('div');
+  const txt = e.data;
+  line.textContent = txt;
+  if (txt.includes('===')) line.className = 'log-phase';
+  else if (txt.includes('ERROR') || txt.includes('FAILED')) line.className = 'log-err';
+  else if (txt.includes('Done.') || txt.includes('complete')) line.className = 'log-ok';
+  logBox.appendChild(line);
+  logBox.scrollTop = logBox.scrollHeight;
+};
+
+es.addEventListener('done', function() {
+  es.close();
+  if (liveBadge) {
+    liveBadge.textContent = '✓ Done';
+    liveBadge.className = 'badge badge-green';
+  }
+  // Reload after 1.5s to show updated status
+  setTimeout(() => location.reload(), 1500);
+});
+
+es.onerror = function() {
+  es.close();
+  if (liveBadge) {
+    liveBadge.textContent = '✗ Disconnected';
+    liveBadge.className = 'badge badge-red';
+  }
+};
+{% endif %}
+</script>
+{% endblock %}

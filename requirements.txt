@@ -1,17 +1,24 @@
 # Install with: pip install -r requirements.txt
-# One API key only: GOOGLE_API_KEY for both embeddings (text-embedding-004) + LLM.
-# No GPU, no local model downloads.
 
 tiktoken
 haystack-ai>=2.0
 qdrant-haystack>=5.0
-fastembed-haystack>=1.0      # BM25 sparse embedder (CPU, ~1MB vocab, no GPU)
+fastembed-haystack>=1.0      # BM25 sparse (CPU, no GPU)
 google-genai-haystack>=2.0   # Gemini embeddings + LLM
 python-dotenv>=1.0
 fastapi>=0.110
 uvicorn[standard]>=0.27
+jinja2>=3.0                  # dashboard templates
+python-multipart>=0.0.9      # file uploads
+requests>=2.28               # Gemini REST embedder
 
-# Codebase RAG (vector + graph)
+# Codebase RAG
 tree-sitter>=0.23
-tree-sitter-language-pack>=0.7   # prebuilt py/js/ts/go grammars, no C toolchain
+tree-sitter-language-pack>=0.7
 networkx>=3.0
+
+# Optional: OpenAI provider (LLM + embeddings)
+# openai>=1.0
+
+# Optional: Anthropic LLM
+# anthropic>=0.25

@@ -6,7 +6,7 @@ r"""Query path: hybrid retrieval over code + docs, graph/section expand, stream.
        v
   decompose into sub-queries   (conditional: LLM only for compound questions)
        v
-  per sub-query: OpenAI dense embed + BM25 sparse — both collections (code + docs)
+  per sub-query: dense embed + BM25 sparse — both collections (code + docs)
        v
   merge + dedupe pool  ->  top RERANK_TOP_K by score
        v
@@ -14,9 +14,6 @@ r"""Query path: hybrid retrieval over code + docs, graph/section expand, stream.
   doc  hits: section-neighbor expansion (seq±1 within same source file)
        v
   LLM explain + cite  (streaming via SSE callback bridge)
-
-Embeddings: OpenAI API (dense) + BM25 fastembed (sparse, CPU, ~1ms).
-No local GPU or heavy model downloads needed.
 """
 import os
 import queue
@@ -26,22 +23,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from livedocs.config import (
-    DENSE_EMBEDDING_MODEL, SPARSE_EMBEDDING_MODEL,
-    QDRANT_URL, QDRANT_API_KEY, CODE_QDRANT_COLLECTION, DOCS_QDRANT_COLLECTION,
-    RETRIEVE_TOP_K, RERANK_TOP_K, DENSE_EMBEDDING_DIM,
-    MAX_SUBQUERIES,
+    SPARSE_EMBEDDING_MODEL,
+    CODE_QDRANT_COLLECTION, DOCS_QDRANT_COLLECTION,
 )
 
 from haystack.components.builders import ChatPromptBuilder
 from haystack.dataclasses import ChatMessage
 from haystack_integrations.document_stores.qdrant import QdrantDocumentStore
 from haystack_integrations.components.embedders.fastembed import FastembedSparseTextEmbedder
-from livedocs.ingest.gemini_embedder import GeminiTextEmbedder
 from haystack_integrations.components.retrievers.qdrant import QdrantHybridRetriever
 
 from livedocs.query.llm import make_generator, make_lite_client
 from livedocs.ingest.code_graph import CodeGraph
-from livedocs.query.app_utils import _github_url
+from livedocs.query.app_utils import _github_url, docs_to_source_dicts
+from livedocs.ingest.embedders import make_text_embedder
 
 
 SYSTEM_PROMPT = """You are an assistant that answers questions about a codebase and its documentation using the passages provided as context.
@@ -102,14 +97,6 @@ Rules:
 
 _COMPOUND_SIGNALS = (" and ", " and\n", ";", "? and", "? how", "? what", "? where", "? why")
 
-
-def _is_compound(question):
-    """Cheap heuristic: true only when a question is clearly multi-part."""
-    q = question.lower()
-    return any(s in q for s in _COMPOUND_SIGNALS) or q.count("?") > 1
-
-
-# --- Cached runtime components -----------------------------------------------
 _code_store = None
 _docs_store = None
 _dense_emb = None
@@ -119,42 +106,58 @@ _docs_retriever = None
 _prompt_builder = None
 _generator = None
 _graph = None
-_lite = None   # cheap client for rewrite/decompose
+_lite = None
+
+
+def reset():
+    """Clear cached components. Called after a build so next request reloads with fresh settings."""
+    global _code_store, _docs_store, _dense_emb, _sparse_emb
+    global _code_retriever, _docs_retriever, _prompt_builder, _generator, _graph, _lite
+    _code_store = _docs_store = _dense_emb = _sparse_emb = None
+    _code_retriever = _docs_retriever = _prompt_builder = _generator = _graph = _lite = None
 
 
 def _ensure_loaded():
     global _code_store, _docs_store, _dense_emb, _sparse_emb
-    global _code_retriever, _docs_retriever
-    global _prompt_builder, _generator, _graph, _lite
+    global _code_retriever, _docs_retriever, _prompt_builder, _generator, _graph, _lite
 
     if _code_store is not None:
         return
-    if not os.environ.get("GOOGLE_API_KEY"):
-        raise SystemExit("GOOGLE_API_KEY not set. Required for embeddings + LLM. Add it to .env.")
 
+    from livedocs.settings import get_settings
     from haystack.utils import Secret
-    _qdrant_key = Secret.from_token(QDRANT_API_KEY) if QDRANT_API_KEY else None
+
+    s = get_settings()
+    provider = s.embedding.provider
+
+    if provider == "google" and not os.environ.get("GOOGLE_API_KEY"):
+        raise SystemExit("GOOGLE_API_KEY not set. Add it in the dashboard Settings tab.")
+    if provider == "openai" and not os.environ.get("OPENAI_API_KEY"):
+        raise SystemExit("OPENAI_API_KEY not set. Add it in the dashboard Settings tab.")
+
+    qdrant_url = s.qdrant.url
+    qdrant_api_key = s.qdrant.api_key
+    _qdrant_key = Secret.from_token(qdrant_api_key) if qdrant_api_key else None
+
     _code_store = QdrantDocumentStore(
-        url=QDRANT_URL, index=CODE_QDRANT_COLLECTION,
-        embedding_dim=DENSE_EMBEDDING_DIM, use_sparse_embeddings=True,
+        url=qdrant_url, index=CODE_QDRANT_COLLECTION,
+        embedding_dim=s.embedding.dim, use_sparse_embeddings=True,
         api_key=_qdrant_key,
     )
     _docs_store = QdrantDocumentStore(
-        url=QDRANT_URL, index=DOCS_QDRANT_COLLECTION,
-        embedding_dim=DENSE_EMBEDDING_DIM, use_sparse_embeddings=True,
+        url=qdrant_url, index=DOCS_QDRANT_COLLECTION,
+        embedding_dim=s.embedding.dim, use_sparse_embeddings=True,
         api_key=_qdrant_key,
     )
 
-    # Dense: Gemini text-embedding-004 via direct SDK (bypasses v1beta bug)
-    _dense_emb = GeminiTextEmbedder(model=DENSE_EMBEDDING_MODEL)
+    _dense_emb = make_text_embedder()
     _dense_emb.warm_up()
 
-    # Sparse: BM25 via fastembed — CPU, ~1MB vocab, no neural inference
     _sparse_emb = FastembedSparseTextEmbedder(model=SPARSE_EMBEDDING_MODEL)
     _sparse_emb.warm_up()
 
-    _code_retriever = QdrantHybridRetriever(document_store=_code_store, top_k=RETRIEVE_TOP_K)
-    _docs_retriever = QdrantHybridRetriever(document_store=_docs_store, top_k=RETRIEVE_TOP_K)
+    _code_retriever = QdrantHybridRetriever(document_store=_code_store, top_k=s.retrieval.retrieve_top_k)
+    _docs_retriever = QdrantHybridRetriever(document_store=_docs_store, top_k=s.retrieval.retrieve_top_k)
 
     _prompt_builder = ChatPromptBuilder(
         template=[
@@ -168,7 +171,7 @@ def _ensure_loaded():
 
     _graph = CodeGraph.load()
     if _graph is None:
-        print("  (no code graph -- graph expansion disabled; run build.py)")
+        print("  (no code graph — graph expansion disabled; run a build)")
     else:
         print(f"  Code graph: {_graph.stats()}")
 
@@ -177,7 +180,10 @@ def warm_up():
     _ensure_loaded()
 
 
-# --- Retrieval helpers -------------------------------------------------------
+def _is_compound(question):
+    q = question.lower()
+    return any(s in q for s in _COMPOUND_SIGNALS) or q.count("?") > 1
+
 
 def rewrite_question(question, history):
     if not history:
@@ -192,7 +198,7 @@ def rewrite_question(question, history):
 
 
 def decompose_question(question):
-    """Split compound question into sub-queries. Skips LLM for simple questions."""
+    from livedocs.settings import get_settings
     if not _is_compound(question):
         return [question]
     try:
@@ -200,14 +206,14 @@ def decompose_question(question):
         result = _lite(DECOMPOSE_SYSTEM_PROMPT, user_prompt)
         lines = [l.strip(" -*\t") for l in (result or "").splitlines() if l.strip()]
         subs = [l for l in lines if l]
-        return subs[:MAX_SUBQUERIES] if subs else [question]
+        max_sq = get_settings().retrieval.max_subqueries
+        return subs[:max_sq] if subs else [question]
     except Exception as e:
         print(f"  (decompose failed: {type(e).__name__}: {e})")
         return [question]
 
 
 def _retrieve_one(subquery):
-    """Embed once, query both code + docs collections, return combined list."""
     dense = _dense_emb.run(text=subquery)["embedding"]
     sparse = _sparse_emb.run(text=subquery)["sparse_embedding"]
     code_docs = _code_retriever.run(query_embedding=dense, query_sparse_embedding=sparse)["documents"]
@@ -216,7 +222,6 @@ def _retrieve_one(subquery):
 
 
 def _dedupe(docs):
-    """Dedupe by (node_id or source, chunk_index), keeping highest score."""
     best = {}
     for d in docs:
         m = d.meta or {}
@@ -228,9 +233,10 @@ def _dedupe(docs):
 
 
 def _expand_with_graph(reranked):
-    """1-hop call-graph neighbors for code hits."""
+    from livedocs.settings import get_settings
     if _graph is None:
         return []
+    s = get_settings()
     have = {d.meta.get("node_id") for d in reranked}
     neighbor_ids = []
     for d in reranked:
@@ -251,11 +257,12 @@ def _expand_with_graph(reranked):
             continue
         seen.add(nid)
         out.append(d)
-    return out[:RERANK_TOP_K]
+    return out[:s.retrieval.rerank_top_k]
 
 
 def _expand_docs(reranked):
-    """Adjacent-section neighbors for doc hits (seq±1 within same source)."""
+    from livedocs.settings import get_settings
+    s = get_settings()
     have_keys = {
         (d.meta.get("source", ""), d.meta.get("chunk_index", 0))
         for d in reranked
@@ -267,7 +274,6 @@ def _expand_docs(reranked):
         m = d.meta or {}
         source = m.get("source")
         seq = m.get("seq")
-        # Only process doc chunks (have source/seq, no node_id)
         if not source or seq is None or m.get("node_id"):
             continue
         for neighbor_seq in (seq - 1, seq + 1):
@@ -287,19 +293,14 @@ def _expand_docs(reranked):
             neighbors = _docs_store.filter_documents(filters=filters)
             out.extend(neighbors)
 
-    return out[:RERANK_TOP_K]
+    return out[:s.retrieval.rerank_top_k]
 
-
-# --- Public API --------------------------------------------------------------
 
 def prepare(question, history=None):
-    """Retrieval phase — returns (prompt_msgs, reranked, related, subqueries).
-
-    All retrieval + ranking done here; no LLM tokens generated yet. Used by
-    the streaming endpoint to hold sources before streaming starts.
-    """
+    from livedocs.settings import get_settings
     _ensure_loaded()
     history = history or []
+    s = get_settings()
 
     standalone = rewrite_question(question, history)
     subqueries = decompose_question(standalone)
@@ -309,14 +310,12 @@ def prepare(question, history=None):
         pool.extend(_retrieve_one(sq))
     pool = _dedupe(pool)
 
-    # No reranker — sort by hybrid score, take top-k. Good enough for low volume.
-    reranked = sorted(pool, key=lambda d: d.score or 0, reverse=True)[:RERANK_TOP_K]
+    reranked = sorted(pool, key=lambda d: d.score or 0, reverse=True)[:s.retrieval.rerank_top_k]
 
     graph_related = _expand_with_graph(reranked)
     doc_related = _expand_docs(reranked)
     related = graph_related + doc_related
 
-    # Inject github_url into meta so the prompt template and source dicts both use it.
     for d in reranked + related:
         m = d.meta or {}
         if m.get("repo") and m.get("file") and "github_url" not in m:
@@ -335,12 +334,7 @@ def prepare(question, history=None):
 
 
 def ask_stream(question, history=None):
-    """Generator that yields (event_type, data) pairs for SSE.
-
-    event_type in {"token", "meta", "error"}
-    token data: str (partial answer text)
-    meta  data: dict {sources, related, sub_queries}
-    """
+    """Generator yielding (event_type, data) pairs for SSE."""
     try:
         msgs, reranked, related, subqueries = prepare(question, history)
     except Exception as e:
@@ -376,7 +370,6 @@ def ask_stream(question, history=None):
             return
         yield ("token", item)
 
-    from app_utils import docs_to_source_dicts
     yield ("meta", {
         "sources": docs_to_source_dicts(reranked, with_score=True),
         "related": docs_to_source_dicts(related, with_score=False),
@@ -385,7 +378,7 @@ def ask_stream(question, history=None):
 
 
 def ask(question, history=None):
-    """Blocking wrapper — used by CLI __main__ only."""
+    """Blocking wrapper — used by /ask endpoint and CLI."""
     _ensure_loaded()
     msgs, reranked, related, subqueries = prepare(question, history)
     answer = _generator.run(messages=msgs)["replies"][0].text
@@ -402,14 +395,7 @@ if __name__ == "__main__":
     for d in reranked:
         m = d.meta
         if m.get("node_id") or m.get("repo"):
-            print(f"  {m['repo']}/{m['file']}:{m['start_line']}-{m['end_line']} ({m['symbol_type']} {m['symbol']}) score={d.score:.3f}")
+            print(f"  {m['repo']}/{m['file']}:{m['start_line']}-{m['end_line']} score={d.score:.3f}")
         else:
-            print(f"  docs/{m['source']} [{m['heading']}] seq={m.get('seq')} score={d.score:.3f}")
-    print(f"\n--- {len(related)} related ---")
-    for d in related:
-        m = d.meta
-        if m.get("node_id") or m.get("repo"):
-            print(f"  {m['repo']}/{m['file']}:{m['start_line']}-{m['end_line']} ({m['symbol_type']} {m['symbol']})")
-        else:
-            print(f"  docs/{m['source']} [{m['heading']}] seq={m.get('seq')}")
+            print(f"  docs/{m['source']} [{m['heading']}] score={d.score:.3f}")
     print(f"\n--- Answer ---\n{answer}")
