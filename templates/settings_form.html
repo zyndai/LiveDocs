@@ -44,7 +44,8 @@
   <div class="form-row">
     <div class="form-group">
       <label>Rewriter model <span class="text-muted">(fast, cheap)</span></label>
-      <input type="text" name="llm_rewriter_model" value="{{ s.llm.rewriter_model }}" placeholder="e.g. gemini-2.5-flash">
+      <input type="text" name="llm_rewriter_model" id="llm_rewriter_model" value="{{ s.llm.rewriter_model }}" placeholder="e.g. gemini-2.5-flash">
+      <div class="help-text">Must be a chat/text-generation model — NOT a reranker. Used for query rewriting.</div>
     </div>
     <div class="form-group">
       <label>Temperature</label>
@@ -82,9 +83,10 @@
     <div class="form-group">
       <label>Provider</label>
       <select name="emb_provider" id="emb_provider" onchange="updateEmbPreset()">
-        <option value="google" {% if s.embedding.provider == 'google' %}selected{% endif %}>Google Gemini</option>
-        <option value="openai" {% if s.embedding.provider == 'openai' %}selected{% endif %}>OpenAI</option>
-        <option value="local"  {% if s.embedding.provider == 'local'  %}selected{% endif %}>Local (bge-m3, CPU)</option>
+        <option value="google"     {% if s.embedding.provider == 'google'     %}selected{% endif %}>Google Gemini</option>
+        <option value="openai"     {% if s.embedding.provider == 'openai'     %}selected{% endif %}>OpenAI</option>
+        <option value="local"      {% if s.embedding.provider == 'local'      %}selected{% endif %}>Local (bge-m3, CPU)</option>
+        <option value="cloudflare" {% if s.embedding.provider == 'cloudflare' %}selected{% endif %}>Cloudflare Workers AI</option>
       </select>
     </div>
     <div class="form-group">
@@ -94,6 +96,20 @@
     <div class="form-group">
       <label>Vector dim</label>
       <input type="number" name="emb_dim" id="emb_dim" value="{{ s.embedding.dim }}" min="64" max="4096">
+    </div>
+  </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Batch sleep (seconds)</label>
+      <input type="number" name="emb_batch_sleep" id="emb_batch_sleep" value="{{ s.embedding.batch_sleep }}" min="0" max="60">
+      <div class="help-text">Sleep between embedding batches. Set 0 for providers without rate limits (e.g. Cloudflare).</div>
+    </div>
+  </div>
+  <div class="form-row" id="emb_base_url_row" style="display:{% if s.embedding.provider == 'cloudflare' %}flex{% else %}none{% endif %}">
+    <div class="form-group">
+      <label>Embedding Base URL</label>
+      <input type="text" name="emb_base_url" id="emb_base_url" value="{{ s.embedding.base_url }}" placeholder="https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1">
+      <div class="help-text">OpenAI-compatible endpoint. Required when embedding provider = Cloudflare.</div>
     </div>
   </div>
 </div>
@@ -198,12 +214,17 @@
 {% block scripts %}
 <script>
 const LLM_SUGGESTIONS = {{ llm_suggestions | tojson }};
+const LLM_REWRITER_SUGGESTIONS = {{ llm_rewriter_suggestions | tojson }};
 const EMB_PRESETS = {{ embedding_presets | tojson }};
 
 function updateLLMModels() {
   const p = document.getElementById('llm_provider').value;
   const hints = (LLM_SUGGESTIONS[p] || []).join(' / ');
   document.getElementById('llm_model_hint').textContent = hints ? 'Suggestions: ' + hints : '';
+  const rewriterHints = LLM_REWRITER_SUGGESTIONS[p] || [];
+  if (rewriterHints.length) {
+    document.getElementById('llm_rewriter_model').value = rewriterHints[0];
+  }
 }
 
 function updateEmbPreset() {
@@ -213,6 +234,9 @@ function updateEmbPreset() {
     document.getElementById('emb_model').value = preset[0];
     document.getElementById('emb_dim').value = preset[1];
   }
+  document.getElementById('emb_base_url_row').style.display = (p === 'cloudflare') ? 'flex' : 'none';
+  if (p === 'cloudflare') document.getElementById('emb_batch_sleep').value = 0;
+  else if (p === 'google' || p === 'openai') document.getElementById('emb_batch_sleep').value = 10;
 }
 
 updateLLMModels();

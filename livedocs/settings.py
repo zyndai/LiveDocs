@@ -35,6 +35,10 @@ class EmbeddingSettings:
     provider: str = "google"
     model: str = _cfg.DENSE_EMBEDDING_MODEL
     dim: int = _cfg.DENSE_EMBEDDING_DIM
+    # OpenAI-compatible endpoint base URL (cloudflare provider only).
+    base_url: str = ""
+    # Seconds to sleep between embedding batches. Set 0 for providers without rate limits (e.g. Cloudflare).
+    batch_sleep: int = 10
 
 
 @dataclass
@@ -70,6 +74,7 @@ EMBEDDING_PRESETS: dict[str, tuple[str, int]] = {
     "google": ("gemini-embedding-2", 768),
     "openai": ("text-embedding-3-small", 1536),
     "local": ("BAAI/bge-m3", 1024),
+    "cloudflare": ("@cf/baai/bge-m3", 1024),
 }
 
 # LLM provider → suggested default models
@@ -79,7 +84,19 @@ LLM_MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "anthropic": ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"],
     "cloudflare": [
         "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-        "@cf/openai/gpt-oss-120b",
+        "@cf/meta/llama-4-scout-17b-16e-instruct",
+        "@cf/qwen/qwen2.5-coder-32b-instruct",
+    ],
+}
+
+# LLM provider → suggested rewriter models (must be chat/text generation models, NOT rerankers)
+LLM_REWRITER_SUGGESTIONS: dict[str, list[str]] = {
+    "google": ["gemini-2.0-flash", "gemini-2.5-flash"],
+    "openai": ["gpt-4o-mini", "gpt-3.5-turbo"],
+    "anthropic": ["claude-haiku-4-5-20251001"],
+    "cloudflare": [
+        "@cf/meta/llama-3.1-8b-instruct",
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         "@cf/qwen/qwen2.5-coder-32b-instruct",
     ],
 }

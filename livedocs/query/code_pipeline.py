@@ -49,6 +49,7 @@ Rules:
 4. If the context genuinely lacks what's needed, say what's missing and which area to look in -- don't pretend.
 5. Be direct and technical. Show short code/signatures or doc excerpts from the context when they answer the question.
 6. End with a "Sources:" line listing each location you actually used, one per line.
+8. Always format your entire response in Markdown. Use headers, bullet lists, bold, and fenced code blocks where appropriate.
 7. Authority hierarchy: DOCUMENTATION passages describe the supported product behavior, workflows, and user-facing requirements; CODE passages show how things are implemented. When the documentation states that a step, setting, or prerequisite is required as part of a workflow, treat the documentation as authoritative -- even if the code suggests it is technically optional or unenforced. If docs and code conflict, answer according to the documentation first, then briefly note what the code actually does. Only fall back to code-derived behavior when the documentation does not address the question.
 """
 
@@ -159,7 +160,8 @@ def _ensure_loaded():
     )
 
     _dense_emb = make_text_embedder()
-    _dense_emb.warm_up()
+    if hasattr(_dense_emb, 'warm_up'):
+        _dense_emb.warm_up()
 
     _sparse_emb = FastembedSparseTextEmbedder(model=SPARSE_EMBEDDING_MODEL)
     _sparse_emb.warm_up()
@@ -223,6 +225,8 @@ def decompose_question(question):
 
 def _retrieve_one(subquery):
     dense = _dense_emb.run(text=subquery)["embedding"]
+    if dense is None:
+        raise RuntimeError("Embedding returned None — check API key, rate limits, or base_url for your embedding provider.")
     sparse = _sparse_emb.run(text=subquery)["sparse_embedding"]
     code_docs = _code_retriever.run(query_embedding=dense, query_sparse_embedding=sparse)["documents"]
     docs_docs = _docs_retriever.run(query_embedding=dense, query_sparse_embedding=sparse)["documents"]
@@ -379,9 +383,13 @@ def ask_stream(question, history=None):
     _DONE = object()
 
     def _callback(chunk):
-        text = getattr(chunk, "content", "") or ""
-        if text:
-            token_queue.put(text)
+        # Cloudflare sometimes sends delta.content as int. Haystack stores the same chunk
+        # object and later does "".join([c.content for c in chunks]) — coerce to str here
+        # so the stored reference is also fixed before Haystack tries to join them.
+        if not isinstance(chunk.content, str):
+            chunk.content = str(chunk.content) if chunk.content is not None else ""
+        if chunk.content:
+            token_queue.put(chunk.content)
 
     def _run_gen():
         try:

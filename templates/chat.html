@@ -41,16 +41,61 @@ input.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 
+function renderMdInto(el, text) {
+  el.innerHTML = marked.parse(text, {gfm: true});
+  el.querySelectorAll('pre code').forEach(block => {
+    try { hljs.highlightElement(block); } catch (e) {}
+  });
+}
+
+function sourceLabel(s) {
+  if (s.file) {
+    const f = s.file.split('/').pop();
+    return s.start_line ? `${f}:${s.start_line}` : f;
+  }
+  if (s.source) {
+    const f = s.source.split('/').pop();
+    return s.heading ? `${f} › ${s.heading}` : f;
+  }
+  return s.github_url || '?';
+}
+
+function buildSources(sources) {
+  const src = document.createElement('div');
+  src.className = 'msg-sources';
+  const title = document.createElement('span');
+  title.textContent = 'Sources: ';
+  src.appendChild(title);
+  sources.forEach((s, i) => {
+    if (i > 0) src.appendChild(document.createTextNode(' · '));
+    if (s.github_url) {
+      const a = document.createElement('a');
+      a.href = s.github_url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = sourceLabel(s);
+      src.appendChild(a);
+    } else {
+      src.appendChild(document.createTextNode(sourceLabel(s)));
+    }
+  });
+  return src;
+}
+
 function appendMsg(role, text, sources) {
   const div = document.createElement('div');
   div.className = 'msg msg-' + role;
-  div.textContent = text;
+  if (role === 'assistant') {
+    const content = document.createElement('div');
+    content.className = 'msg-content';
+    renderMdInto(content, text);
+    div.appendChild(content);
+  } else {
+    div.textContent = text;
+  }
 
   if (sources && sources.length) {
-    const src = document.createElement('div');
-    src.className = 'msg-sources';
-    src.textContent = 'Sources: ' + sources.map(s => s.github_url || s.file || s.source || '?').join(' · ');
-    div.appendChild(src);
+    div.appendChild(buildSources(sources));
   }
 
   messages.appendChild(div);
@@ -106,9 +151,14 @@ async function sendMessage() {
 
         if (event === 'token' || event === 'message') {
           try { answer += JSON.parse(data); } catch { answer += data; }
-          placeholder.childNodes[0]
-            ? (placeholder.childNodes[0].nodeValue = answer)
-            : (placeholder.textContent = answer);
+          let contentEl = placeholder.querySelector('.msg-content');
+          if (!contentEl) {
+            contentEl = document.createElement('div');
+            contentEl.className = 'msg-content';
+            placeholder.innerHTML = '';
+            placeholder.appendChild(contentEl);
+          }
+          renderMdInto(contentEl, answer);
         } else if (event === 'meta') {
           try { metaReceived = JSON.parse(data); } catch {}
         } else if (event === 'done') {
@@ -116,16 +166,13 @@ async function sendMessage() {
         } else if (event === 'error') {
           try { answer = 'Error: ' + JSON.parse(data).detail; } catch { answer = data; }
           placeholder.textContent = answer;
+          answer = '';
         }
       }
     }
 
     if (metaReceived && metaReceived.sources && metaReceived.sources.length) {
-      const src = document.createElement('div');
-      src.className = 'msg-sources';
-      src.textContent = 'Sources: ' +
-        metaReceived.sources.map(s => s.github_url || s.file || s.source || '?').join(' · ');
-      placeholder.appendChild(src);
+      placeholder.appendChild(buildSources(metaReceived.sources));
     }
 
     history.push({role: 'assistant', content: answer});

@@ -32,8 +32,21 @@ def make_document_embedder(provider=None, model=None, dim=None):
         from haystack_integrations.components.embedders.fastembed import FastembedDocumentEmbedder
         return FastembedDocumentEmbedder(model=model)
 
+    if provider == "cloudflare":
+        from livedocs.ingest.cloudflare_embedder import CloudflareDocumentEmbedder
+        base_url = s.embedding.base_url
+        if not base_url:
+            raise ValueError(
+                "Cloudflare embedding provider needs embedding.base_url set to your OpenAI-compatible "
+                "endpoint, e.g. https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1. "
+                "Set it in the dashboard Settings tab."
+            )
+        import os
+        os.environ["CLOUDFLARE_EMBEDDING_BASE_URL"] = base_url
+        return CloudflareDocumentEmbedder(model=model)
+
     raise ValueError(
-        f"Unknown embedding provider {provider!r}. Use 'google', 'openai', or 'local'."
+        f"Unknown embedding provider {provider!r}. Use 'google', 'openai', 'local', or 'cloudflare'."
     )
 
 
@@ -61,6 +74,19 @@ def make_text_embedder(provider=None, model=None, dim=None):
         from haystack_integrations.components.embedders.fastembed import FastembedTextEmbedder
         return FastembedTextEmbedder(model=model)
 
+    if provider == "cloudflare":
+        from livedocs.ingest.cloudflare_embedder import CloudflareTextEmbedder
+        base_url = s.embedding.base_url
+        if not base_url:
+            raise ValueError(
+                "Cloudflare embedding provider needs embedding.base_url set to your OpenAI-compatible "
+                "endpoint, e.g. https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1. "
+                "Set it in the dashboard Settings tab."
+            )
+        import os
+        os.environ["CLOUDFLARE_EMBEDDING_BASE_URL"] = base_url
+        return CloudflareTextEmbedder(model=model)
+
     raise ValueError(
-        f"Unknown embedding provider {provider!r}. Use 'google', 'openai', or 'local'."
+        f"Unknown embedding provider {provider!r}. Use 'google', 'openai', 'local', or 'cloudflare'."
     )

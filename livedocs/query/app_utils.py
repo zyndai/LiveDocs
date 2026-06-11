@@ -7,7 +7,7 @@ def _github_url(repo: str, file: str, start_line, end_line) -> str | None:
     urls = {}
     branches = {}
     for src in s.sources:
-        if src.get("corpus") == "code" and src.get("github_base"):
+        if src.get("github_base"):
             name = src["name"]
             urls[name] = src["github_base"]
             branches[name] = src.get("branch", "main")
@@ -47,11 +47,18 @@ def doc_to_source_dict(d, with_score=True):
             "github_url": _github_url(repo, file, start_line, end_line) if repo and file else None,
         })
     else:
+        source = m.get("source")
+        # source looks like "<source-name>/path/to/file.md" — first segment maps to a configured source
+        gh = None
+        if source and "/" in source:
+            repo = source.split("/", 1)[0]
+            gh = _github_url(repo, source, None, None)
         base.update({
-            "source": m.get("source"),
+            "source": source,
             "heading": m.get("heading"),
             "subheading": m.get("subheading"),
             "product_area": m.get("product_area"),
+            "github_url": gh,
         })
     return base
 

@@ -72,7 +72,6 @@ def build_code_documents(chunks):
 
 _CHECKPOINT_DIR = PROJECT_ROOT / "tmp" / "checkpoints"
 _WRITE_BATCH = 10
-_BATCH_SLEEP = 10
 
 
 def _checkpoint_path(collection):
@@ -106,7 +105,8 @@ def index_documents(documents, collection, recreate=True, resume=False, log=prin
     log(f"--- Dense: {s.embedding.provider}/{s.embedding.model} dim={emb_dim} | Sparse: BM25 ---")
 
     dense_embedder = make_document_embedder()
-    dense_embedder.warm_up()
+    if hasattr(dense_embedder, 'warm_up'):
+        dense_embedder.warm_up()
     sparse_embedder = FastembedSparseDocumentEmbedder(model=SPARSE_EMBEDDING_MODEL)
     sparse_embedder.warm_up()
 
@@ -144,8 +144,8 @@ def index_documents(documents, collection, recreate=True, resume=False, log=prin
         checkpoint.write_text(json.dumps({"done": i + 1, "total": total_batches}))
         log(f"  Written {n} docs. Progress: {i+1}/{total_batches} batches.")
 
-        if i + 1 < total_batches:
-            time.sleep(_BATCH_SLEEP)
+        if i + 1 < total_batches and s.embedding.batch_sleep > 0:
+            time.sleep(s.embedding.batch_sleep)
 
     checkpoint.unlink(missing_ok=True)
     log(f"\nDone. {written_total} total documents written to '{collection}'.")

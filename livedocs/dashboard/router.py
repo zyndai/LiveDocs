@@ -57,12 +57,13 @@ async def overview(request: Request):
 
 @router.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
-    from livedocs.settings import get_settings, LLM_MODEL_SUGGESTIONS, EMBEDDING_PRESETS
+    from livedocs.settings import get_settings, LLM_MODEL_SUGGESTIONS, LLM_REWRITER_SUGGESTIONS, EMBEDDING_PRESETS
     s = get_settings()
     ctx = _base_ctx(request)
     ctx.update({
         "s": s,
         "llm_suggestions": LLM_MODEL_SUGGESTIONS,
+        "llm_rewriter_suggestions": LLM_REWRITER_SUGGESTIONS,
         "embedding_presets": EMBEDDING_PRESETS,
         "saved": False,
         "needs_reindex": False,
@@ -85,6 +86,8 @@ async def settings_save(
     emb_provider: str = Form(...),
     emb_model: str = Form(...),
     emb_dim: int = Form(...),
+    emb_base_url: str = Form(""),
+    emb_batch_sleep: int = Form(10),
     google_api_key: str = Form(""),
     openai_api_key: str = Form(""),
     anthropic_api_key: str = Form(""),
@@ -98,7 +101,7 @@ async def settings_save(
     graph_expand_hops: int = Form(1),
     graph_max_neighbors: int = Form(6),
 ):
-    from livedocs.settings import get_settings, save_settings, EMBEDDING_PRESETS, LLM_MODEL_SUGGESTIONS
+    from livedocs.settings import get_settings, save_settings, EMBEDDING_PRESETS, LLM_MODEL_SUGGESTIONS, LLM_REWRITER_SUGGESTIONS
 
     old_emb = get_settings().embedding
     needs_reindex = (
@@ -117,7 +120,7 @@ async def settings_save(
             "rewriter_model": llm_rewriter_model,
             "base_url": llm_base_url,
         },
-        "embedding": {"provider": emb_provider, "model": emb_model, "dim": emb_dim},
+        "embedding": {"provider": emb_provider, "model": emb_model, "dim": emb_dim, "base_url": emb_base_url, "batch_sleep": emb_batch_sleep},
         "keys": {
             "GOOGLE_API_KEY": google_api_key,
             "OPENAI_API_KEY": openai_api_key,
@@ -145,6 +148,7 @@ async def settings_save(
         ctx.update({
             "s": s,
             "llm_suggestions": LLM_MODEL_SUGGESTIONS,
+            "llm_rewriter_suggestions": LLM_REWRITER_SUGGESTIONS,
             "embedding_presets": EMBEDDING_PRESETS,
             "saved": True,
             "needs_reindex": needs_reindex,
@@ -157,6 +161,7 @@ async def settings_save(
         ctx.update({
             "s": get_settings(),
             "llm_suggestions": LLM_MODEL_SUGGESTIONS,
+            "llm_rewriter_suggestions": LLM_REWRITER_SUGGESTIONS,
             "embedding_presets": EMBEDDING_PRESETS,
             "saved": False,
             "needs_reindex": False,
