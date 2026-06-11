@@ -8,7 +8,8 @@ r"""Query path: hybrid retrieval over code + docs, graph/section expand, stream.
        v
   per sub-query: dense embed + BM25 sparse — both collections (code + docs)
        v
-  merge + dedupe pool  ->  top RERANK_TOP_K by score
+  merge + dedupe pool  ->  docs-first rerank: top DOCS_TOP_K docs, code fills
+                           remaining slots up to RERANK_TOP_K
        v
   code hits: graph expansion (1-hop callers/callees, O(1) RAM lookup)
   doc  hits: section-neighbor expansion (seq±1 within same source file)
@@ -48,20 +49,27 @@ Rules:
 4. If the context genuinely lacks what's needed, say what's missing and which area to look in -- don't pretend.
 5. Be direct and technical. Show short code/signatures or doc excerpts from the context when they answer the question.
 6. End with a "Sources:" line listing each location you actually used, one per line.
+7. Authority hierarchy: DOCUMENTATION passages describe the supported product behavior, workflows, and user-facing requirements; CODE passages show how things are implemented. When the documentation states that a step, setting, or prerequisite is required as part of a workflow, treat the documentation as authoritative -- even if the code suggests it is technically optional or unenforced. If docs and code conflict, answer according to the documentation first, then briefly note what the code actually does. Only fall back to code-derived behavior when the documentation does not address the question.
 """
 
 USER_PROMPT_TEMPLATE = """{% if history %}=== PRIOR CONVERSATION ===
 {% for turn in history %}{{ turn.role }}: {{ turn.content }}
 {% endfor %}
-{% endif %}=== CONTEXT ===
-{% for doc in documents %}
-{% if doc.meta.get("node_id") or doc.meta.get("repo") %}[Passage {{ loop.index }}] {% if doc.meta.get("github_url") %}{{ doc.meta.github_url }}{% else %}{{ doc.meta.repo }}/{{ doc.meta.file }}:{{ doc.meta.start_line }}-{{ doc.meta.end_line }}{% endif %} ({{ doc.meta.symbol_type }} {{ doc.meta.symbol }}, {{ doc.meta.lang }})
-{% else %}[Passage {{ loop.index }}] docs/{{ doc.meta.source }} [{{ doc.meta.heading }}{% if doc.meta.subheading %} > {{ doc.meta.subheading }}{% endif %}]
-{% endif %}{{ doc.content }}
+{% endif %}{% if doc_passages %}=== CONTEXT: DOCUMENTATION (authoritative for product behavior) ===
+{% for doc in doc_passages %}
+[Passage {{ loop.index }}] docs/{{ doc.meta.source }} [{{ doc.meta.heading }}{% if doc.meta.subheading %} > {{ doc.meta.subheading }}{% endif %}]
+{{ doc.content }}
 
 ---
 {% endfor %}
-{% if related %}=== Related context ===
+{% endif %}{% if code_passages %}=== CONTEXT: CODE (implementation detail) ===
+{% for doc in code_passages %}
+[Passage {{ loop.index + doc_passages|length }}] {% if doc.meta.get("github_url") %}{{ doc.meta.github_url }}{% else %}{{ doc.meta.repo }}/{{ doc.meta.file }}:{{ doc.meta.start_line }}-{{ doc.meta.end_line }}{% endif %} ({{ doc.meta.symbol_type }} {{ doc.meta.symbol }}, {{ doc.meta.lang }})
+{{ doc.content }}
+
+---
+{% endfor %}
+{% endif %}{% if related %}=== Related context ===
 {% for doc in related %}
 {% if doc.meta.get("node_id") or doc.meta.get("repo") %}[Related] {% if doc.meta.get("github_url") %}{{ doc.meta.github_url }}{% else %}{{ doc.meta.repo }}/{{ doc.meta.file }}:{{ doc.meta.start_line }}-{{ doc.meta.end_line }}{% endif %} ({{ doc.meta.symbol_type }} {{ doc.meta.symbol }})
 {% else %}[Related] docs/{{ doc.meta.source }} [{{ doc.meta.heading }}{% if doc.meta.subheading %} > {{ doc.meta.subheading }}{% endif %}]
@@ -164,7 +172,7 @@ def _ensure_loaded():
             ChatMessage.from_system(SYSTEM_PROMPT),
             ChatMessage.from_user(USER_PROMPT_TEMPLATE),
         ],
-        required_variables=["documents", "question"],
+        required_variables=["doc_passages", "code_passages", "question"],
     )
     _generator = make_generator()
     _lite = make_lite_client()
@@ -219,6 +227,28 @@ def _retrieve_one(subquery):
     code_docs = _code_retriever.run(query_embedding=dense, query_sparse_embedding=sparse)["documents"]
     docs_docs = _docs_retriever.run(query_embedding=dense, query_sparse_embedding=sparse)["documents"]
     return code_docs + docs_docs
+
+
+def _is_code_hit(d):
+    m = d.meta or {}
+    return bool(m.get("node_id") or m.get("repo"))
+
+
+def _rerank_docs_first(pool, docs_top_k, total_k):
+    """Docs-priority selection: reserve up to docs_top_k slots for documentation
+    (authoritative for product behavior), fill the rest with code, backfill
+    symmetrically when either side runs short. Docs come first in output order."""
+    doc_hits = sorted((d for d in pool if not _is_code_hit(d)), key=lambda d: d.score or 0, reverse=True)
+    code_hits = sorted((d for d in pool if _is_code_hit(d)), key=lambda d: d.score or 0, reverse=True)
+
+    n_docs = min(docs_top_k, len(doc_hits), total_k)
+    selected_docs = doc_hits[:n_docs]
+    remaining = total_k - n_docs
+    selected_code = code_hits[:remaining]
+    shortfall = remaining - len(selected_code)
+    if shortfall > 0:
+        selected_docs = doc_hits[:n_docs + shortfall]
+    return selected_docs, selected_code
 
 
 def _dedupe(docs):
@@ -310,11 +340,14 @@ def prepare(question, history=None):
         pool.extend(_retrieve_one(sq))
     pool = _dedupe(pool)
 
-    reranked = sorted(pool, key=lambda d: d.score or 0, reverse=True)[:s.retrieval.rerank_top_k]
+    selected_docs, selected_code = _rerank_docs_first(
+        pool, s.retrieval.docs_top_k, s.retrieval.rerank_top_k,
+    )
+    reranked = selected_docs + selected_code
 
     graph_related = _expand_with_graph(reranked)
     doc_related = _expand_docs(reranked)
-    related = graph_related + doc_related
+    related = doc_related + graph_related
 
     for d in reranked + related:
         m = d.meta or {}
@@ -324,7 +357,8 @@ def prepare(question, history=None):
                 d.meta["github_url"] = url
 
     msgs = _prompt_builder.run(
-        documents=reranked,
+        doc_passages=selected_docs,
+        code_passages=selected_code,
         related=related,
         question=question,
         history=history,

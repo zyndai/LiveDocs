@@ -26,6 +26,8 @@ class LLMSettings:
     max_output_tokens: int = _cfg.LLM_MAX_OUTPUT_TOKENS
     thinking_budget: int = _cfg.LLM_THINKING_BUDGET
     rewriter_model: str = _cfg.REWRITER_MODEL
+    # OpenAI-compatible endpoint base URL (cloudflare provider only).
+    base_url: str = ""
 
 
 @dataclass
@@ -40,6 +42,7 @@ class KeysSettings:
     GOOGLE_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
+    CLOUDFLARE_API_TOKEN: str = ""
 
 
 @dataclass
@@ -53,6 +56,7 @@ class RetrievalSettings:
     retrieve_top_k: int = _cfg.RETRIEVE_TOP_K
     rerank_top_k: int = _cfg.RERANK_TOP_K
     max_subqueries: int = _cfg.MAX_SUBQUERIES
+    docs_top_k: int = _cfg.DOCS_TOP_K
 
 
 @dataclass
@@ -73,6 +77,11 @@ LLM_MODEL_SUGGESTIONS: dict[str, list[str]] = {
     "google": ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
     "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
     "anthropic": ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5-20251001"],
+    "cloudflare": [
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "@cf/openai/gpt-oss-120b",
+        "@cf/qwen/qwen2.5-coder-32b-instruct",
+    ],
 }
 
 

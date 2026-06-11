@@ -31,6 +31,7 @@
         <option value="google"    {% if s.llm.provider == 'google'    %}selected{% endif %}>Google Gemini</option>
         <option value="openai"    {% if s.llm.provider == 'openai'    %}selected{% endif %}>OpenAI</option>
         <option value="anthropic" {% if s.llm.provider == 'anthropic' %}selected{% endif %}>Anthropic Claude</option>
+        <option value="cloudflare" {% if s.llm.provider == 'cloudflare' %}selected{% endif %}>Cloudflare Workers AI</option>
       </select>
     </div>
     <div class="form-group">
@@ -61,6 +62,15 @@
       <input type="number" name="llm_thinking_budget" value="{{ s.llm.thinking_budget }}" min="-1" max="8192">
       <div class="help-text">-1 = dynamic. Ignored for non-thinking models.</div>
     </div>
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>Base URL <span class="text-muted">(Cloudflare / OpenAI-compatible only)</span></label>
+      <input type="text" name="llm_base_url" value="{{ s.llm.base_url }}" placeholder="https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1">
+      <div class="help-text">OpenAI-compatible endpoint. Required when provider = Cloudflare.</div>
+    </div>
+    <div></div>
   </div>
 </div>
 
@@ -109,7 +119,11 @@
       <label>Anthropic API Key</label>
       <input type="password" name="anthropic_api_key" value="{{ s.keys.ANTHROPIC_API_KEY }}" placeholder="sk-ant-...">
     </div>
-    <div></div>
+    <div class="form-group">
+      <label>Cloudflare API Token</label>
+      <input type="password" name="cloudflare_api_token" value="{{ s.keys.CLOUDFLARE_API_TOKEN }}" placeholder="cf token">
+      <div class="help-text">Required if provider = Cloudflare. Pair with Base URL above.</div>
+    </div>
   </div>
 </div>
 
@@ -149,6 +163,15 @@
         <label>Max sub-queries</label>
         <input type="number" name="max_subqueries" value="{{ s.retrieval.max_subqueries }}" min="1" max="10">
       </div>
+    </div>
+    <div class="form-row-3">
+      <div class="form-group">
+        <label>Docs top-k</label>
+        <input type="number" name="docs_top_k" value="{{ s.retrieval.docs_top_k }}" min="0" max="50">
+        <div class="help-text">Rerank slots reserved for documentation (docs-first). 0 = code-first.</div>
+      </div>
+      <div></div>
+      <div></div>
     </div>
   </div>
 

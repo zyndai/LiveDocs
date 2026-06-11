@@ -124,7 +124,11 @@ QDRANT_API_KEY = _os.environ.get("QDRANT_API_KEY")  # None = no auth (local Dock
 
 # --- Retrieval ---
 RETRIEVE_TOP_K = 10
-RERANK_TOP_K = 5
+RERANK_TOP_K = 6
+# Rerank slots reserved for documentation passages. Docs are authoritative for
+# product behavior/workflows, so they get first claim on the context budget;
+# code fills the remaining slots. 0 = code-first (docs only as backfill).
+DOCS_TOP_K = 3
 
 # --- API ---
 API_PORT = 8002    # main app is on 8001

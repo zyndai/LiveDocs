@@ -31,9 +31,29 @@ def make_generator(streaming_callback=None):
 
     if provider == "openai":
         from haystack.components.generators.chat import OpenAIChatGenerator
+        # OpenAI-compatible chat APIs take max_tokens, not max_output_tokens.
+        gen_kwargs.pop("max_output_tokens", None)
+        gen_kwargs["max_tokens"] = llm.max_output_tokens
         return OpenAIChatGenerator(
             model=llm.model,
             api_key=Secret.from_env_var("OPENAI_API_KEY"),
+            **kwargs,
+        )
+
+    if provider == "cloudflare":
+        from haystack.components.generators.chat import OpenAIChatGenerator
+        if not llm.base_url:
+            raise ValueError(
+                "Cloudflare provider needs llm.base_url set to your OpenAI-compatible "
+                "endpoint, e.g. https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1. "
+                "Set it in the dashboard Settings tab."
+            )
+        gen_kwargs.pop("max_output_tokens", None)
+        gen_kwargs["max_tokens"] = llm.max_output_tokens
+        return OpenAIChatGenerator(
+            model=llm.model,
+            api_key=Secret.from_env_var("CLOUDFLARE_API_TOKEN"),
+            api_base_url=llm.base_url,
             **kwargs,
         )
 
@@ -46,7 +66,7 @@ def make_generator(streaming_callback=None):
         )
 
     raise ValueError(
-        f"Unknown LLM provider {llm.provider!r}. Set to 'google', 'openai', or 'anthropic'."
+        f"Unknown LLM provider {llm.provider!r}. Set to 'google', 'openai', 'anthropic', or 'cloudflare'."
     )
 
 
@@ -76,6 +96,29 @@ def make_lite_client():
         import os
         from openai import OpenAI
         oc = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+        def call(system_prompt, user_prompt):
+            resp = oc.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.0,
+                max_tokens=256,
+            )
+            return resp.choices[0].message.content.strip()
+        return call
+
+    if provider == "cloudflare":
+        import os
+        from openai import OpenAI
+        base_url = s.llm.base_url
+        if not base_url:
+            raise ValueError(
+                "Cloudflare provider needs llm.base_url set. Set it in the dashboard Settings tab."
+            )
+        oc = OpenAI(api_key=os.environ["CLOUDFLARE_API_TOKEN"], base_url=base_url)
 
         def call(system_prompt, user_prompt):
             resp = oc.chat.completions.create(
