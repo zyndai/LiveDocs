@@ -141,6 +141,18 @@
       <div class="help-text">Required if provider = Cloudflare. Pair with Base URL above.</div>
     </div>
   </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Cohere API Key <span class="text-muted">(reranker)</span></label>
+      <input type="password" name="cohere_api_key" value="{{ s.keys.COHERE_API_KEY }}" placeholder="co_...">
+      <div class="help-text">Required if Reranker provider = Cohere.</div>
+    </div>
+    <div class="form-group">
+      <label>Jina API Key <span class="text-muted">(reranker)</span></label>
+      <input type="password" name="jina_api_key" value="{{ s.keys.JINA_API_KEY }}" placeholder="jina_...">
+      <div class="help-text">Required if Reranker provider = Jina AI.</div>
+    </div>
+  </div>
 </div>
 
 <!-- Qdrant -->
@@ -189,6 +201,36 @@
       <div></div>
       <div></div>
     </div>
+    <div class="form-row-3">
+      <div class="form-group">
+        <label>Reranker provider</label>
+        <select name="reranker_provider" id="reranker_provider" onchange="updateReranker()">
+          <option value="local"       {% if s.retrieval.reranker_provider == 'local'       %}selected{% endif %}>Local (fastembed, no API key)</option>
+          <option value="cloudflare" {% if s.retrieval.reranker_provider == 'cloudflare' %}selected{% endif %}>Cloudflare Workers AI</option>
+          <option value="cohere"     {% if s.retrieval.reranker_provider == 'cohere'     %}selected{% endif %}>Cohere API</option>
+          <option value="jina"       {% if s.retrieval.reranker_provider == 'jina'       %}selected{% endif %}>Jina AI API</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Reranker model</label>
+        <input type="text" name="reranker_model" id="reranker_model" value="{{ s.retrieval.reranker_model }}" placeholder="BAAI/bge-reranker-base">
+        <div class="help-text" id="reranker_model_hint"></div>
+      </div>
+      <div class="form-group">
+        <label>Rerank candidates</label>
+        <input type="number" name="rerank_candidates" value="{{ s.retrieval.rerank_candidates }}" min="1" max="200">
+        <div class="help-text">Max candidates scored per query.</div>
+      </div>
+    </div>
+    <div class="form-row-3">
+      <div class="form-group">
+        <label>Min confidence</label>
+        <input type="number" name="min_confidence" value="{{ s.retrieval.min_confidence }}" min="0" max="1" step="0.001">
+        <div class="help-text">Below this top rerank score: answer "insufficient evidence". 0 = always generate. Local BGE: ~0.005; Cohere/Jina: ~0.1.</div>
+      </div>
+      <div></div>
+      <div></div>
+    </div>
   </div>
 
   <div class="card">
@@ -216,6 +258,26 @@
 const LLM_SUGGESTIONS = {{ llm_suggestions | tojson }};
 const LLM_REWRITER_SUGGESTIONS = {{ llm_rewriter_suggestions | tojson }};
 const EMB_PRESETS = {{ embedding_presets | tojson }};
+
+const RERANKER_MODELS = {
+  local:       'BAAI/bge-reranker-base (default) / Xenova/ms-marco-MiniLM-L-6-v2 (fast)',
+  cloudflare:  '@cf/baai/bge-reranker-base — uses Cloudflare API token + embedding Base URL',
+  cohere:      'rerank-v3.5 (default)',
+  jina:        'jina-reranker-v2-base-multilingual (default)',
+};
+const RERANKER_DEFAULTS = {
+  local:       'BAAI/bge-reranker-base',
+  cloudflare:  '@cf/baai/bge-reranker-base',
+  cohere:      'rerank-v3.5',
+  jina:        'jina-reranker-v2-base-multilingual',
+};
+
+function updateReranker() {
+  const p = document.getElementById('reranker_provider').value;
+  document.getElementById('reranker_model_hint').textContent = RERANKER_MODELS[p] || '';
+  document.getElementById('reranker_model').value = RERANKER_DEFAULTS[p] || '';
+}
+updateReranker();
 
 function updateLLMModels() {
   const p = document.getElementById('llm_provider').value;

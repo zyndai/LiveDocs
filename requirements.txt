@@ -3,7 +3,7 @@
 tiktoken
 haystack-ai>=2.0
 qdrant-haystack>=5.0
-fastembed-haystack>=1.0      # BM25 sparse (CPU, no GPU)
+fastembed-haystack>=1.4      # BM25 sparse + cross-encoder reranker (CPU, no GPU)
 google-genai-haystack>=2.0   # Gemini embeddings + LLM
 python-dotenv>=1.0
 fastapi>=0.110

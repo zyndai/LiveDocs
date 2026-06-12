@@ -7,6 +7,7 @@ Endpoints:
   /dashboard/*       HTMX admin UI (settings, sources, build, chat)
 """
 import json
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -111,21 +112,39 @@ def health():
 @app.post("/ask/stream")
 async def ask_stream_endpoint(req: AskRequest):
     _require_deployed()
+    from livedocs import qlog
     history = [{"role": m.role, "content": m.content} for m in req.history]
 
     def generate():
+        start = time.monotonic()
+        answer_parts, meta, error = [], {}, None
         try:
             for event_type, data in ask_stream(req.question, history=history):
                 if event_type == "token":
+                    answer_parts.append(data)
                     yield _sse("token", json.dumps(data))
                 elif event_type == "meta":
+                    meta = data
                     yield _sse("meta", json.dumps(data))
                 elif event_type == "error":
+                    error = data
                     yield _sse("error", json.dumps({"detail": data}))
                     return
             yield _sse("done", "")
         except Exception as e:
-            yield _sse("error", json.dumps({"detail": f"{type(e).__name__}: {e}"}))
+            error = f"{type(e).__name__}: {e}"
+            yield _sse("error", json.dumps({"detail": error}))
+        finally:
+            qlog.log_question(
+                question=req.question,
+                answer="".join(answer_parts) or None,
+                confidence=meta.get("confidence"),
+                low_confidence=meta.get("low_confidence", False),
+                sub_queries=meta.get("sub_queries"),
+                n_sources=len(meta.get("sources", [])) if meta else None,
+                duration_ms=int((time.monotonic() - start) * 1000),
+                error=error,
+            )
 
     return StreamingResponse(
         generate(),
@@ -138,14 +157,30 @@ async def ask_stream_endpoint(req: AskRequest):
 async def ask_endpoint(req: AskRequest):
     """Non-streaming endpoint. Returns full answer + sources in one JSON response."""
     _require_deployed()
-    from livedocs.query.code_pipeline import ask
+    from livedocs import qlog
+    from livedocs.query.code_pipeline import ask, INSUFFICIENT_EVIDENCE_ANSWER
     from livedocs.query.app_utils import docs_to_source_dicts
 
     history = [{"role": m.role, "content": m.content} for m in req.history]
+    start = time.monotonic()
     try:
         reranked, related, answer, sub_queries = ask(req.question, history=history)
     except Exception as e:
+        qlog.log_question(
+            question=req.question,
+            duration_ms=int((time.monotonic() - start) * 1000),
+            error=f"{type(e).__name__}: {e}",
+        )
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+
+    qlog.log_question(
+        question=req.question,
+        answer=answer,
+        low_confidence=(answer == INSUFFICIENT_EVIDENCE_ANSWER),
+        sub_queries=sub_queries,
+        n_sources=len(reranked),
+        duration_ms=int((time.monotonic() - start) * 1000),
+    )
 
     return AskResponse(
         answer=answer,

@@ -47,6 +47,8 @@ class KeysSettings:
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     CLOUDFLARE_API_TOKEN: str = ""
+    COHERE_API_KEY: str = ""
+    JINA_API_KEY: str = ""
 
 
 @dataclass
@@ -61,6 +63,10 @@ class RetrievalSettings:
     rerank_top_k: int = _cfg.RERANK_TOP_K
     max_subqueries: int = _cfg.MAX_SUBQUERIES
     docs_top_k: int = _cfg.DOCS_TOP_K
+    reranker_provider: str = _cfg.RERANKER_PROVIDER  # "local" | "cohere" | "jina"
+    reranker_model: str = _cfg.RERANKER_MODEL
+    rerank_candidates: int = _cfg.RERANK_CANDIDATES
+    min_confidence: float = _cfg.MIN_CONFIDENCE
 
 
 @dataclass

@@ -8,8 +8,12 @@ r"""Query path: hybrid retrieval over code + docs, graph/section expand, stream.
        v
   per sub-query: dense embed + BM25 sparse — both collections (code + docs)
        v
-  merge + dedupe pool  ->  docs-first rerank: top DOCS_TOP_K docs, code fills
-                           remaining slots up to RERANK_TOP_K
+  merge + dedupe pool  ->  cross-encoder rerank (sigmoid scores, comparable
+                           across code + docs)  ->  confidence gate (below
+                           MIN_CONFIDENCE: answer "insufficient evidence",
+                           skip generation)  ->  docs-first rerank: top
+                           DOCS_TOP_K docs, code fills remaining slots up to
+                           RERANK_TOP_K
        v
   code hits: graph expansion (1-hop callers/callees, O(1) RAM lookup)
   doc  hits: section-neighbor expansion (seq±1 within same source file)
@@ -106,6 +110,12 @@ Rules:
 
 _COMPOUND_SIGNALS = (" and ", " and\n", ";", "? and", "? how", "? what", "? where", "? why")
 
+INSUFFICIENT_EVIDENCE_ANSWER = (
+    "No sufficiently relevant passages were found in the indexed docs/code for "
+    "this question, so I won't guess. The closest matches are listed under "
+    "Sources — try rephrasing, or name the specific feature, file, or symbol."
+)
+
 _code_store = None
 _docs_store = None
 _dense_emb = None
@@ -116,19 +126,21 @@ _prompt_builder = None
 _generator = None
 _graph = None
 _lite = None
+_ranker = None
 
 
 def reset():
     """Clear cached components. Called after a build so next request reloads with fresh settings."""
     global _code_store, _docs_store, _dense_emb, _sparse_emb
-    global _code_retriever, _docs_retriever, _prompt_builder, _generator, _graph, _lite
+    global _code_retriever, _docs_retriever, _prompt_builder, _generator, _graph, _lite, _ranker
     _code_store = _docs_store = _dense_emb = _sparse_emb = None
     _code_retriever = _docs_retriever = _prompt_builder = _generator = _graph = _lite = None
+    _ranker = None
 
 
 def _ensure_loaded():
     global _code_store, _docs_store, _dense_emb, _sparse_emb
-    global _code_retriever, _docs_retriever, _prompt_builder, _generator, _graph, _lite
+    global _code_retriever, _docs_retriever, _prompt_builder, _generator, _graph, _lite, _ranker
 
     if _code_store is not None:
         return
@@ -165,6 +177,23 @@ def _ensure_loaded():
 
     _sparse_emb = FastembedSparseTextEmbedder(model=SPARSE_EMBEDDING_MODEL)
     _sparse_emb.warm_up()
+
+    if s.retrieval.reranker_provider == "local" and s.retrieval.reranker_model:
+        try:
+            from haystack_integrations.components.rankers.fastembed import FastembedRanker
+            _ranker = FastembedRanker(
+                model_name=s.retrieval.reranker_model,
+                top_k=s.retrieval.rerank_candidates,
+            )
+            _ranker.warm_up()
+            print(f"  Reranker (local): {s.retrieval.reranker_model}")
+        except Exception as e:
+            print(f"  (local reranker load failed, falling back to retrieval scores: {type(e).__name__}: {e})")
+            _ranker = None
+    else:
+        _ranker = None
+        if s.retrieval.reranker_provider in ("cloudflare", "cohere", "jina"):
+            print(f"  Reranker (API): {s.retrieval.reranker_provider} / {s.retrieval.reranker_model}")
 
     _code_retriever = QdrantHybridRetriever(document_store=_code_store, top_k=s.retrieval.retrieve_top_k)
     _docs_retriever = QdrantHybridRetriever(document_store=_docs_store, top_k=s.retrieval.retrieve_top_k)
@@ -255,6 +284,136 @@ def _rerank_docs_first(pool, docs_top_k, total_k):
     return selected_docs, selected_code
 
 
+def _rerank_cloudflare(question, candidates):
+    """Call Cloudflare Workers AI reranker (@cf/baai/bge-reranker-base).
+    Endpoint: POST /accounts/{id}/ai/run/{model}
+    Scores are raw logits — apply sigmoid to normalize to 0-1."""
+    import math
+    import requests
+    from livedocs.settings import get_settings
+    s = get_settings()
+    token = s.keys.CLOUDFLARE_API_TOKEN
+    if not token:
+        raise RuntimeError("CLOUDFLARE_API_TOKEN not set — add it in Settings")
+    # Derive base from embedding base_url: strip trailing /v1
+    emb_base = s.embedding.base_url.rstrip("/")
+    if emb_base.endswith("/v1"):
+        cf_ai_base = emb_base[:-3]  # .../accounts/{id}/ai
+    else:
+        cf_ai_base = emb_base  # fallback: use as-is
+    model = s.retrieval.reranker_model or "@cf/baai/bge-reranker-base"
+    url = f"{cf_ai_base}/run/{model}"
+    contexts = [{"text": d.content or ""} for d in candidates]
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"query": question, "contexts": contexts},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    results = resp.json().get("result", [])
+    # CF returns [{score, index}, ...] — scores are raw logits
+    for r in results:
+        candidates[r["index"]].score = 1 / (1 + math.exp(-float(r["score"])))
+    ranked = sorted(candidates, key=lambda d: d.score or 0, reverse=True)
+    return ranked
+
+
+def _rerank_cohere(question, candidates):
+    """Call Cohere Rerank API. Returns list of docs with updated scores (0-1)."""
+    import requests
+    from livedocs.settings import get_settings
+    s = get_settings()
+    api_key = s.keys.COHERE_API_KEY
+    if not api_key:
+        raise RuntimeError("COHERE_API_KEY not set — add it in Settings")
+    model = s.retrieval.reranker_model or "rerank-v3.5"
+    texts = [d.content or "" for d in candidates]
+    resp = requests.post(
+        "https://api.cohere.com/v2/rerank",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"model": model, "query": question, "documents": texts,
+              "top_n": len(texts), "return_documents": False},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    results = resp.json()["results"]
+    # results: [{index, relevance_score}, ...] sorted by score desc
+    ordered = [None] * len(candidates)
+    for r in results:
+        doc = candidates[r["index"]]
+        doc.score = float(r["relevance_score"])
+        ordered[r["index"]] = doc
+    ranked = [d for d in ordered if d is not None]
+    ranked.sort(key=lambda d: d.score or 0, reverse=True)
+    return ranked
+
+
+def _rerank_jina(question, candidates):
+    """Call Jina Rerank API. Returns list of docs with updated scores (0-1)."""
+    import requests
+    from livedocs.settings import get_settings
+    s = get_settings()
+    api_key = s.keys.JINA_API_KEY
+    if not api_key:
+        raise RuntimeError("JINA_API_KEY not set — add it in Settings")
+    model = s.retrieval.reranker_model or "jina-reranker-v2-base-multilingual"
+    texts = [d.content or "" for d in candidates]
+    resp = requests.post(
+        "https://api.jina.ai/v1/rerank",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"model": model, "query": question, "documents": texts,
+              "top_n": len(texts)},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    results = resp.json()["results"]
+    for r in results:
+        candidates[r["index"]].score = float(r["relevance_score"])
+    ranked = sorted(candidates, key=lambda d: d.score or 0, reverse=True)
+    return ranked
+
+
+def _cross_encode(question, pool):
+    """Deep-score query<->chunk pairs. Overwrites each doc's .score with a
+    0-1 relevance probability. Returns (pool, top_score); top_score is None
+    when the ranker is unavailable so the confidence gate stays inert."""
+    import math
+    from livedocs.settings import get_settings
+
+    s = get_settings()
+    provider = s.retrieval.reranker_provider
+
+    if not pool:
+        return pool, None
+
+    candidates = sorted(pool, key=lambda d: d.score or 0, reverse=True)
+    candidates = candidates[:s.retrieval.rerank_candidates]
+
+    try:
+        if provider == "cloudflare":
+            ranked = _rerank_cloudflare(question, candidates)
+        elif provider == "cohere":
+            ranked = _rerank_cohere(question, candidates)
+        elif provider == "jina":
+            ranked = _rerank_jina(question, candidates)
+        else:
+            # local fastembed cross-encoder
+            if _ranker is None:
+                return pool, None
+            ranked = _ranker.run(query=question, documents=candidates)["documents"]
+            # fastembed returns raw logits; convert to sigmoid probabilities
+            for d in ranked:
+                d.score = 1 / (1 + math.exp(-(d.score or 0)))
+    except Exception as e:
+        print(f"  (cross-encode [{provider}] failed, using retrieval scores: {type(e).__name__}: {e})")
+        return pool, None
+
+    top3 = ", ".join(f"{d.score:.4f}" for d in ranked[:3])
+    print(f"  Rerank [{provider}] scores (top 3): {top3}")
+    return ranked, (ranked[0].score if ranked else 0.0)
+
+
 def _dedupe(docs):
     best = {}
     for d in docs:
@@ -330,7 +489,19 @@ def _expand_docs(reranked):
     return out[:s.retrieval.rerank_top_k]
 
 
+def _attach_github_urls(docs):
+    for d in docs:
+        m = d.meta or {}
+        if m.get("repo") and m.get("file") and "github_url" not in m:
+            url = _github_url(m["repo"], m["file"], m.get("start_line"), m.get("end_line"))
+            if url:
+                d.meta["github_url"] = url
+
+
 def prepare(question, history=None):
+    """Returns (msgs, reranked, related, subqueries, confidence).
+    msgs is None when the confidence gate fires — reranked then holds the
+    near-miss candidates and no prompt is built (generation must be skipped)."""
     from livedocs.settings import get_settings
     _ensure_loaded()
     history = history or []
@@ -344,6 +515,12 @@ def prepare(question, history=None):
         pool.extend(_retrieve_one(sq))
     pool = _dedupe(pool)
 
+    pool, confidence = _cross_encode(standalone, pool)
+    if confidence is not None and confidence < s.retrieval.min_confidence:
+        near_misses = sorted(pool, key=lambda d: d.score or 0, reverse=True)[:3]
+        _attach_github_urls(near_misses)
+        return None, near_misses, [], subqueries, confidence
+
     selected_docs, selected_code = _rerank_docs_first(
         pool, s.retrieval.docs_top_k, s.retrieval.rerank_top_k,
     )
@@ -353,12 +530,7 @@ def prepare(question, history=None):
     doc_related = _expand_docs(reranked)
     related = doc_related + graph_related
 
-    for d in reranked + related:
-        m = d.meta or {}
-        if m.get("repo") and m.get("file") and "github_url" not in m:
-            url = _github_url(m["repo"], m["file"], m.get("start_line"), m.get("end_line"))
-            if url:
-                d.meta["github_url"] = url
+    _attach_github_urls(reranked + related)
 
     msgs = _prompt_builder.run(
         doc_passages=selected_docs,
@@ -368,15 +540,26 @@ def prepare(question, history=None):
         history=history,
     )["prompt"]
 
-    return msgs, reranked, related, subqueries
+    return msgs, reranked, related, subqueries, confidence
 
 
 def ask_stream(question, history=None):
     """Generator yielding (event_type, data) pairs for SSE."""
     try:
-        msgs, reranked, related, subqueries = prepare(question, history)
+        msgs, reranked, related, subqueries, confidence = prepare(question, history)
     except Exception as e:
         yield ("error", f"Retrieval failed: {type(e).__name__}: {e}")
+        return
+
+    if msgs is None:
+        yield ("token", INSUFFICIENT_EVIDENCE_ANSWER)
+        yield ("meta", {
+            "sources": docs_to_source_dicts(reranked, with_score=True),
+            "related": [],
+            "sub_queries": subqueries,
+            "confidence": confidence,
+            "low_confidence": True,
+        })
         return
 
     token_queue = queue.Queue()
@@ -416,13 +599,17 @@ def ask_stream(question, history=None):
         "sources": docs_to_source_dicts(reranked, with_score=True),
         "related": docs_to_source_dicts(related, with_score=False),
         "sub_queries": subqueries,
+        "confidence": confidence,
+        "low_confidence": False,
     })
 
 
 def ask(question, history=None):
     """Blocking wrapper — used by /ask endpoint and CLI."""
     _ensure_loaded()
-    msgs, reranked, related, subqueries = prepare(question, history)
+    msgs, reranked, related, subqueries, confidence = prepare(question, history)
+    if msgs is None:
+        return reranked, related, INSUFFICIENT_EVIDENCE_ANSWER, subqueries
     answer = _generator.run(messages=msgs)["replies"][0].text
     return reranked, related, answer, subqueries
 

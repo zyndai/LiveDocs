@@ -98,8 +98,21 @@ DENSE_EMBEDDING_DIM = 768
 # Provides keyword/exact-match recall for code identifiers. No API cost.
 SPARSE_EMBEDDING_MODEL = "Qdrant/bm25"
 
-# Reranker: disabled — not needed at low query volume. To re-enable, add
-# RERANKER_MODEL = "cohere" and wire CohereRanker in code_pipeline.py.
+# Reranker: fastembed cross-encoder (local, CPU, no API cost). Deep-scores
+# query<->chunk pairs after hybrid retrieval, before docs-first slotting.
+# Fast alternative: "Xenova/ms-marco-MiniLM-L-6-v2" (~10x faster, weaker on code).
+# Set to "" to disable and fall back to raw Qdrant fusion scores.
+# Provider: "cloudflare" | "local" (fastembed) | "cohere" | "jina"
+RERANKER_PROVIDER = "cloudflare"
+RERANKER_MODEL = "@cf/baai/bge-reranker-base"
+# Cap candidates fed to the cross-encoder (cost is linear in pool size).
+RERANK_CANDIDATES = 40
+# Confidence gate: if the best sigmoid(logit) score after reranking is below
+# this, skip generation and return an insufficient-evidence answer. 0 disables.
+# BGE reranker logits are very negative for technical content — sigmoid scores
+# for relevant pairs land around 0.01-0.05; off-topic is ~0.0001. 0.005 is a
+# safe default: blocks truly unrelated queries, passes everything in-domain.
+MIN_CONFIDENCE = 0.005
 
 # --- LLM ---
 # Provider: "google" | "openai" | "anthropic". Swap = change LLM_PROVIDER + LLM_MODEL + env var.
@@ -129,6 +142,11 @@ RERANK_TOP_K = 6
 # product behavior/workflows, so they get first claim on the context budget;
 # code fills the remaining slots. 0 = code-first (docs only as backfill).
 DOCS_TOP_K = 3
+
+# --- Question log ---
+# Every question asked via /ask or /ask/stream is recorded here (SQLite).
+# Shown in the dashboard "Questions" tab.
+QUESTIONS_DB_PATH = HERE / "tmp" / "questions.db"
 
 # --- API ---
 API_PORT = 8002    # main app is on 8001

@@ -1,0 +1,100 @@
+{% extends "layout.html" %}
+{% block title %}Questions{% endblock %}
+{% block page_title %}Questions{% endblock %}
+
+{% block content %}
+{% set active = 'questions' %}
+
+<div class="card">
+  <div class="card-title">
+    Asked Questions
+    <small>— {{ total }} total</small>
+    {% if total %}
+    <form method="post" action="/dashboard/questions/clear" style="float:right"
+          onsubmit="return confirm('Clear the entire question log? This cannot be undone.')">
+      <button type="submit" class="btn btn-danger btn-sm">Clear log</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if questions %}
+  <table>
+    <thead>
+      <tr>
+        <th>Time (UTC)</th>
+        <th>Question</th>
+        <th>Confidence</th>
+        <th>Sources</th>
+        <th>Duration</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for q in questions %}
+      <tr>
+        <td class="text-muted text-sm" style="white-space:nowrap;">{{ q.ts | replace('T', ' ') | replace('+00:00', '') }}</td>
+        <td style="max-width:420px;">
+          <details>
+            <summary style="cursor:pointer;">{{ q.question }}</summary>
+            {% if q.sub_queries and q.sub_queries | length > 1 %}
+            <div class="text-muted text-sm" style="margin-top:6px;">
+              Sub-queries:
+              <ul style="margin:4px 0 0 18px;">
+                {% for sq in q.sub_queries %}<li>{{ sq }}</li>{% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+            {% if q.answer %}
+            <pre style="margin-top:8px;white-space:pre-wrap;max-height:300px;overflow:auto;font-size:12px;">{{ q.answer }}</pre>
+            {% endif %}
+            {% if q.error %}
+            <div class="alert alert-error" style="margin-top:8px;">{{ q.error }}</div>
+            {% endif %}
+          </details>
+        </td>
+        <td>
+          {% if q.confidence is not none %}
+            {% if q.low_confidence %}
+              <span class="badge badge-red">{{ '%.2f' | format(q.confidence) }}</span>
+            {% else %}
+              <span class="badge badge-green">{{ '%.2f' | format(q.confidence) }}</span>
+            {% endif %}
+          {% else %}
+            <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+        <td>{{ q.n_sources if q.n_sources is not none else '—' }}</td>
+        <td class="text-muted text-sm" style="white-space:nowrap;">
+          {% if q.duration_ms is not none %}{{ '%.1f' | format(q.duration_ms / 1000) }}s{% else %}—{% endif %}
+        </td>
+        <td>
+          {% if q.error %}
+            <span class="badge badge-red">error</span>
+          {% elif q.low_confidence %}
+            <span class="badge badge-yellow">no answer</span>
+          {% else %}
+            <span class="badge badge-green">answered</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if pages > 1 %}
+  <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+    {% if page > 1 %}
+    <a class="btn btn-sm" href="/dashboard/questions?page={{ page - 1 }}">&larr; Newer</a>
+    {% endif %}
+    <span class="text-muted text-sm">Page {{ page }} / {{ pages }}</span>
+    {% if page < pages %}
+    <a class="btn btn-sm" href="/dashboard/questions?page={{ page + 1 }}">Older &rarr;</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% else %}
+  <p class="text-muted">No questions logged yet. Questions asked via the API or the Chat tab appear here.</p>
+  {% endif %}
+</div>
+{% endblock %}

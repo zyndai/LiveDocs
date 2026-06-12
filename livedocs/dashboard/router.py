@@ -92,12 +92,18 @@ async def settings_save(
     openai_api_key: str = Form(""),
     anthropic_api_key: str = Form(""),
     cloudflare_api_token: str = Form(""),
+    cohere_api_key: str = Form(""),
+    jina_api_key: str = Form(""),
     qdrant_url: str = Form("http://localhost:6333"),
     qdrant_api_key: str = Form(""),
     retrieve_top_k: int = Form(10),
     rerank_top_k: int = Form(6),
     docs_top_k: int = Form(3),
     max_subqueries: int = Form(4),
+    reranker_provider: str = Form("cloudflare"),
+    reranker_model: str = Form(""),
+    rerank_candidates: int = Form(40),
+    min_confidence: float = Form(0.005),
     graph_expand_hops: int = Form(1),
     graph_max_neighbors: int = Form(6),
 ):
@@ -126,6 +132,8 @@ async def settings_save(
             "OPENAI_API_KEY": openai_api_key,
             "ANTHROPIC_API_KEY": anthropic_api_key,
             "CLOUDFLARE_API_TOKEN": cloudflare_api_token,
+            "COHERE_API_KEY": cohere_api_key,
+            "JINA_API_KEY": jina_api_key,
         },
         "qdrant": {"url": qdrant_url, "api_key": qdrant_api_key or None},
         "retrieval": {
@@ -133,6 +141,10 @@ async def settings_save(
             "rerank_top_k": rerank_top_k,
             "docs_top_k": docs_top_k,
             "max_subqueries": max_subqueries,
+            "reranker_provider": reranker_provider,
+            "reranker_model": reranker_model.strip(),
+            "rerank_candidates": rerank_candidates,
+            "min_confidence": min_confidence,
         },
         "graph": {"expand_hops": graph_expand_hops, "max_neighbors": graph_max_neighbors},
     }
@@ -301,6 +313,35 @@ async def build_log_stream(request: Request):
 async def build_status_json(request: Request):
     from livedocs import jobs
     return jobs.get_status() or {}
+
+
+# ── questions log ─────────────────────────────────────────────────────────────
+
+_QUESTIONS_PER_PAGE = 50
+
+
+@router.get("/questions", response_class=HTMLResponse)
+async def questions_page(request: Request, page: int = 1):
+    from livedocs import qlog
+    page = max(page, 1)
+    total = qlog.count()
+    rows = qlog.recent(limit=_QUESTIONS_PER_PAGE, offset=(page - 1) * _QUESTIONS_PER_PAGE)
+    ctx = _base_ctx(request)
+    ctx.update({
+        "questions": rows,
+        "total": total,
+        "page": page,
+        "pages": max((total + _QUESTIONS_PER_PAGE - 1) // _QUESTIONS_PER_PAGE, 1),
+        "active": "questions",
+    })
+    return _tr(request, "questions.html", ctx)
+
+
+@router.post("/questions/clear", response_class=HTMLResponse)
+async def questions_clear(request: Request):
+    from livedocs import qlog
+    qlog.clear()
+    return RedirectResponse("/dashboard/questions", status_code=303)
 
 
 # ── chat playground ───────────────────────────────────────────────────────────
